@@ -101,16 +101,20 @@ description = "Fast smoke test"
 estimated_server_time = 0.0
 measure_download_loaded_latency = true
 measure_upload_loaded_latency = true
-# Transfers here are small and loopback is quick, so both knobs go lower still
-# — the e2e suite asserts that AIM ratings actually render.
-loaded_request_min_duration = 10.0
-loaded_latency_throttle = 10.0
+# Both knobs go lower still, and the transfers are larger than they look like
+# they need to be. A hosted CI runner's loopback measured 34-51 Gbps, where a
+# 20 MB transfer finishes in ~3 ms — under the threshold, so no loaded-latency
+# samples are collected and every AIM rating silently disappears. This failed
+# in Firefox on CI while passing everywhere else. 64 MB keeps a comfortable
+# margin at both ends: ~30 ms on a fast runner, ~500 ms on 1 GbE.
+loaded_request_min_duration = 5.0
+loaded_latency_throttle = 5.0
 measurements = [
   { type = "latency", numPackets = 2 },
   { type = "download", bytes = 1000000, count = 1, bypassMinDuration = true },
   { type = "latency", numPackets = 5 },
-  { type = "download", bytes = 20000000, count = 2 },
-  { type = "upload", bytes = 20000000, count = 2 },
+  { type = "download", bytes = 67108864, count = 2 },
+  { type = "upload", bytes = 67108864, count = 2 },
   { type = "latency", numPackets = 2 },
 ]
 
@@ -124,14 +128,15 @@ description = "Packet-loss e2e"
 estimated_server_time = 0.0
 measure_download_loaded_latency = true
 measure_upload_loaded_latency = true
-loaded_request_min_duration = 10.0
-loaded_latency_throttle = 10.0
+# Sized like the quick profile, and for the same reason — see above.
+loaded_request_min_duration = 5.0
+loaded_latency_throttle = 5.0
 measurements = [
   { type = "latency", numPackets = 2 },
   { type = "download", bytes = 1000000, count = 1, bypassMinDuration = true },
   { type = "latency", numPackets = 5 },
-  { type = "download", bytes = 20000000, count = 2 },
-  { type = "upload", bytes = 20000000, count = 2 },
+  { type = "download", bytes = 67108864, count = 2 },
+  { type = "upload", bytes = 67108864, count = 2 },
   { type = "packetLoss", numPackets = 200, batchSize = 10, batchWaitTime = 10, responsesWaitTime = 2000, connectionTimeout = 10000 },
   { type = "latency", numPackets = 2 },
 ]

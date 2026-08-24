@@ -17,16 +17,16 @@ rare so that day-to-day work stays fast.
 cargo test --manifest-path backend/Cargo.toml --release -- --nocapture
 
 # Tier 2 (needs both built first)
-npx --prefix frontend vite build
+npm --prefix frontend run build
 cargo build --release --manifest-path backend/Cargo.toml
-npx --prefix frontend playwright install --with-deps chromium firefox
+(cd frontend && npx playwright install --with-deps chromium firefox)
 npm --prefix frontend run test:e2e
 
 # Tier 2, packet loss (needs coturn)
 docker compose -f docker-compose.e2e.yml up -d
 # start the backend with SPEEDTEST_PROFILE=e2e-packetloss and the TURN vars set,
 # then:
-SPEEDTEST_E2E_PACKETLOSS=1 npx --prefix frontend playwright test packetloss
+SPEEDTEST_E2E_PACKETLOSS=1 npx playwright test packetloss   # from frontend/
 ```
 
 The packet-loss suite skips itself when `SPEEDTEST_E2E_PACKETLOSS` is unset,

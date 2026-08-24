@@ -387,10 +387,18 @@ measurements = [
         let cfg: Config = toml::from_str(&raw).expect("shipped config parses");
 
         // Nominal bytes-per-second each profile is written for.
-        let link_speed: BTreeMap<&str, f64> =
-            [("lan-1g", 125e6), ("lan-10g", 1.25e9), ("quick", 1.25e9)]
-                .into_iter()
-                .collect();
+        // The two e2e profiles run over loopback, which is far quicker than any
+        // real link: a hosted CI runner measured 51 Gbps (6.5 GB/s). Sizing
+        // them for anything slower let transfers finish under the threshold,
+        // which silently removed every AIM rating in Firefox on CI.
+        let link_speed: BTreeMap<&str, f64> = [
+            ("lan-1g", 125e6),
+            ("lan-10g", 1.25e9),
+            ("quick", 6.5e9),
+            ("e2e-packetloss", 6.5e9),
+        ]
+        .into_iter()
+        .collect();
 
         for (name, profile) in &cfg.profiles {
             assert!(

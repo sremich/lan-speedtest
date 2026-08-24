@@ -33,11 +33,13 @@ jobs:
       - name: Unit and contract tests
         run: cargo test --manifest-path backend/Cargo.toml --release -- --nocapture
         env:
-          # Stricter than the local default: the dev box is a WSL2 VM whose raw
-          # TCP loopback ceiling is ~0.7 Gbps, while a hosted runner is far
-          # quicker. The test prints what it actually achieved — read that from
-          # the log and retune this if it turns out to be badly placed.
-          SPEEDTEST_THROUGHPUT_FLOOR_GBPS: "1.5"
+          # Calibrated against a real run: this backend measured 34.3, 51.5 and
+          # 50.6 Gbps over loopback across three passes on a hosted runner
+          # (2026-08-24). A 10 Gbps floor leaves ~3x headroom for runner
+          # variance while still catching any regression of kind. The local
+          # default is far lower because the WSL2 dev box tops out near
+          # 0.7 Gbps; see backend/tests/throughput.rs.
+          SPEEDTEST_THROUGHPUT_FLOOR_GBPS: "10.0"
 
   # Tier 2 — the real engine in a real browser against the real backend.
   e2e:
@@ -107,11 +109,14 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Build
+      - name: Build front end
+        working-directory: frontend
         run: |
-          npm --prefix frontend ci --no-audit --no-fund
-          npx --prefix frontend vite build
-          cargo build --release --manifest-path backend/Cargo.toml
+          npm ci --no-audit --no-fund
+          npx vite build
+
+      - name: Build backend
+        run: cargo build --release --manifest-path backend/Cargo.toml
 
       - name: Start coturn
         run: |

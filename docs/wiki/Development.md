@@ -28,7 +28,7 @@ recreate them.
 ## Run it
 
 ```sh
-npx --prefix frontend vite build            # -> frontend/dist
+npm --prefix frontend run build            # -> frontend/dist
 
 SPEEDTEST_CONFIG=config/speedtest.toml \
 SPEEDTEST_STATIC_DIR=frontend/dist \
