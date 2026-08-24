@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # TODO(milestone-0): set up the project's toolchain here, e.g.
+      #   - uses: actions/setup-python@v5
+      #     with: { python-version: "3.12" }
+      # or
+      #   - uses: actions/setup-node@v4
+      #     with: { node-version: "22" }
+
+      - name: Run tests
+        run: |
+          # TODO(milestone-0): replace with the project's real test command
+          # (e.g. `make test`, `pytest -q`, `pnpm test`). Until then this
+          # only warns, so early scaffold pushes don't fail — but the
+          # release workflow refuses to run while TODO(milestone-0)
+          # markers remain, so this cannot reach a release unconfigured.
+          if [ -f Makefile ] && grep -q '^test:' Makefile; then
+            make test
+          else
+            echo "::warning::No test command configured yet (TODO(milestone-0) in ci.yml)"
+          fi

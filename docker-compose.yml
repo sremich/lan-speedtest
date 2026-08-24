@@ -1,0 +1,14 @@
+# Deploy compose file: pulls the prebuilt image from GHCR.
+# TODO(milestone-0): set the real image name, ports, volumes, env.
+# RULE: after every release goes green, bump the image tag pin here.
+
+services:
+  app:
+    # TODO(milestone-0): ghcr.io/sremich/<repo-name>:v0.1.0   <- the pin to bump
+    image: ghcr.io/sremich/CHANGE-ME:v0.0.0
+    restart: unless-stopped
+    env_file: .env
+    # ports:
+    #   - "8080:8080"
+    # volumes:
+    #   - ./data:/app/data

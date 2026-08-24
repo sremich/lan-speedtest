@@ -1,0 +1,5 @@
+# Normalize line endings (dev happens on Windows, builds on Linux).
+* text=auto
+*.sh text eol=lf
+Dockerfile text eol=lf
+Makefile text eol=lf

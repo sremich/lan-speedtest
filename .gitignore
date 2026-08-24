@@ -1,0 +1,29 @@
+# --- Local-only context (OneDrive-synced, never on GitHub) ---
+/source-files/*
+!/source-files/.gitkeep
+/HANDOVER.md
+/CLAUDE.md
+/DECISIONS.md
+
+# --- Secrets and runtime data ---
+.env
+*.env.local
+/data/
+*.log
+*.db
+
+# --- Language/tool clutter (harmless if unused) ---
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+
+# --- OS/editor ---
+.DS_Store
+Thumbs.db

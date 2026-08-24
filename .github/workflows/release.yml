@@ -1,0 +1,95 @@
+name: Release
+
+# CI owns releases end to end. A human (or agent) only pushes a vX.Y.Z tag;
+# this workflow verifies, tests, builds, pushes the image, and creates the
+# GitHub release. If any step fails, no partial release exists. Never create
+# releases, push images, or edit tags by hand.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag must match VERSION (and be X.Y.Z)
+        run: bash scripts/check-version.sh "${GITHUB_REF_NAME}"
+
+      - name: Refuse to release an unconfigured scaffold
+        run: |
+          # Fail if any milestone-0 TODO marker is still present anywhere.
+          # The needle is assembled at runtime so this file never matches itself.
+          M="TODO(milestone"; M="${M}-0)"
+          if grep -rn --fixed-strings "$M" --exclude-dir=.git .; then
+            echo "::error::Scaffold TODO markers remain — finish milestone 0 before releasing."
+            exit 1
+          fi
+
+      # TODO(milestone-0): mirror the toolchain setup from ci.yml here.
+
+      - name: Run tests
+        run: |
+          # TODO(milestone-0): replace with the project's real test command.
+          # Unlike ci.yml, a release with no working test command MUST fail.
+          make test
+
+  build-and-push:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image (version + SHA baked in)
+        run: |
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
+          docker build \
+            --build-arg VERSION="${GITHUB_REF_NAME#v}" \
+            --build-arg GIT_SHA="${GITHUB_SHA::12}" \
+            -t "$IMAGE:${GITHUB_REF_NAME}" \
+            -t "$IMAGE:latest" \
+            .
+          docker push "$IMAGE:${GITHUB_REF_NAME}"
+          docker push "$IMAGE:latest"
+
+      - name: Smoke-pull the pushed image
+        run: |
+          # GHCR pulls can EOF for ~2 min right after a push — retry.
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_REF_NAME}"
+          for i in 1 2 3 4 5; do
+            docker rmi "$IMAGE" >/dev/null 2>&1 || true
+            if docker pull "$IMAGE"; then exit 0; fi
+            echo "pull attempt $i failed; retrying in 30s"; sleep 30
+          done
+          exit 1
+
+  release:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create GitHub release (pre-release while 0.x)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PRERELEASE=""
+          case "${GITHUB_REF_NAME#v}" in 0.*) PRERELEASE="--prerelease";; esac
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes \
+            $PRERELEASE
+          echo "Release created. REMINDER: bump the docker-compose image pin and run the CLAUDE.md release checklist."
