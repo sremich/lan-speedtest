@@ -58,6 +58,9 @@ export default defineConfig({
             // backend/tests/throughput.rs.
             SPEEDTEST_PROFILE: 'quick',
             SPEEDTEST_STATIC_DIR: 'dist',
+            // History off by default; the history suite starts its own backend
+            // with a database so runs from one suite cannot leak into another.
+            SPEEDTEST_HISTORY_DB: '',
           },
         },
       }),

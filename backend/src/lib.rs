@@ -8,9 +8,11 @@
 //! router rather than a reimplementation of it.
 
 pub mod config;
+pub mod history;
 pub mod payload;
 pub mod routes;
 
 pub use config::Config;
+pub use history::History;
 pub use payload::PayloadSource;
 pub use routes::{router, AppState, GIT_SHA, VERSION};

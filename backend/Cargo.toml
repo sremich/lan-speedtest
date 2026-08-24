@@ -18,7 +18,7 @@ axum = { version = "0.8", default-features = false, features = ["http1", "http2"
 axum-server = { version = "0.7", default-features = false, features = ["tls-rustls-no-provider"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "signal", "time"] }
-tower-http = { version = "0.6", features = ["fs", "trace", "set-header"] }
+tower-http = { version = "0.6", features = ["fs", "trace", "set-header", "limit"] }
 tower = "0.5"
 http-body = "1"
 http-body-util = "0.1"
@@ -26,6 +26,11 @@ bytes = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
+# SQLite via the bundled amalgamation: no libsqlite3 on the host, and the same
+# build everywhere. `serde_json` stores the raw engine summary alongside the
+# extracted columns so a schema gap never loses data.
+rusqlite = { version = "0.32", features = ["bundled"] }
+time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 

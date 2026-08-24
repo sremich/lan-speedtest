@@ -9,7 +9,7 @@ import SpeedTest from '@cloudflare/speedtest';
 import type { MeasurementSummary, Results, Scores } from '@cloudflare/speedtest';
 
 import './styles.css';
-import { assertLanOnly, fetchProfile, fetchStatus, type EngineConfig } from './api';
+import { assertLanOnly, fetchProfile, fetchStatus, submitResult, type EngineConfig } from './api';
 import {
   formatBandwidth,
   formatDuration,
@@ -45,6 +45,7 @@ const ui = {
   precisionNote: el('precision-note'),
   profile: el('profile'),
   build: el('build'),
+  historyLink: el<HTMLAnchorElement>('history-link'),
 };
 
 /** Human labels for the engine's AIM experience keys. */
@@ -173,6 +174,7 @@ async function run(): Promise<void> {
     profile.description ? ` (${profile.description})` : ''
   }`;
   ui.build.textContent = `v${status.version} · ${status.gitSha}`;
+  ui.historyLink.hidden = !status.historyEnabled;
 
   const config: EngineConfig = profile.engineConfig;
   // Fails loudly rather than letting a bad deploy phone home. See api.ts.
@@ -211,6 +213,25 @@ async function run(): Promise<void> {
     setText(ui.phase, 'Complete');
     ui.restart.disabled = false;
     document.body.dataset.testState = 'complete';
+
+    // Best-effort: a storage failure must not present as a failed test.
+    if (status.historyEnabled) {
+      let scores: Record<string, string> = {};
+      try {
+        scores = Object.fromEntries(
+          Object.entries(results.getScores()).map(([k, v]) => [k, v.classificationName]),
+        );
+      } catch {
+        scores = {};
+      }
+      void submitResult({
+        summary: results.getSummary() as unknown as Record<string, unknown>,
+        scores,
+        profile: profile.profile,
+      }).then((stored) => {
+        document.body.dataset.resultStored = stored ? 'yes' : 'no';
+      });
+    }
   };
 
   document.body.dataset.testState = 'running';

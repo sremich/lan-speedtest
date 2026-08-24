@@ -1,0 +1,266 @@
+/**
+ * The history page: stored runs, and a trend chart.
+ *
+ * Charts are hand-drawn SVG rather than a charting library. The whole page is
+ * one list and one line chart, and a library would be more bundle than the job
+ * deserves — the front end's only dependency is the measurement engine itself.
+ */
+
+import './styles.css';
+import { formatBandwidth, formatLatency, formatPacketLoss } from './format';
+
+interface StoredRun {
+  id: number;
+  recordedAt: string;
+  clientIp: string;
+  clientName: string | null;
+  userAgent: string;
+  profile: string;
+  download: number | null;
+  upload: number | null;
+  latency: number | null;
+  jitter: number | null;
+  downLoadedLatency: number | null;
+  upLoadedLatency: number | null;
+  packetLoss: number | null;
+  totalDurationMs: number | null;
+  scores: Record<string, string>;
+}
+
+interface ClientSummary {
+  clientIp: string;
+  clientName: string | null;
+  runs: number;
+  lastSeen: string;
+}
+
+const el = <T extends HTMLElement>(id: string): T => {
+  const node = document.getElementById(id);
+  if (!node) throw new Error(`missing element #${id}`);
+  return node as T;
+};
+
+const ui = {
+  chart: el('chart'),
+  rows: el('rows'),
+  clientFilter: el<HTMLSelectElement>('client-filter'),
+  empty: el('empty'),
+  error: el('error'),
+  count: el('count'),
+};
+
+/** Escapes text destined for innerHTML. User agents are attacker-influenced. */
+function esc(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function clientLabel(run: { clientName: string | null; clientIp: string }): string {
+  return run.clientName ?? run.clientIp;
+}
+
+/** Short, unambiguous local time. */
+function formatWhen(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+/**
+ * A line chart of download and upload over time.
+ *
+ * Drawn oldest-left so it reads as a timeline. Points are positioned by index
+ * rather than by timestamp: runs are irregular and sparse, and an index axis
+ * keeps every point visible instead of bunching a week of tests into one pixel.
+ */
+function renderChart(runs: StoredRun[]): void {
+  const series = [...runs].reverse();
+  const usable = series.filter((r) => r.download !== null || r.upload !== null);
+
+  if (usable.length < 2) {
+    ui.chart.innerHTML =
+      '<p class="note">A trend needs at least two runs. Run the test again to start one.</p>';
+    return;
+  }
+
+  const W = 900;
+  const H = 260;
+  // The left gutter has to fit the widest tick label. At 56 it silently
+  // clipped "250.0 Mbps" down to "50.0 Mbps", which is not a cosmetic bug —
+  // the chart read as an order of magnitude slower than it was.
+  const PAD = { top: 16, right: 16, bottom: 28, left: 78 };
+  const plotW = W - PAD.left - PAD.right;
+  const plotH = H - PAD.top - PAD.bottom;
+
+  const values = usable.flatMap((r) => [r.download, r.upload].filter((v): v is number => v !== null));
+  const max = Math.max(...values);
+  // Round the axis up to something readable rather than to the exact maximum.
+  const ceiling = niceCeiling(max);
+
+  const x = (i: number) => PAD.left + (usable.length === 1 ? plotW / 2 : (i / (usable.length - 1)) * plotW);
+  const y = (v: number) => PAD.top + plotH - (v / ceiling) * plotH;
+
+  const path = (key: 'download' | 'upload') => {
+    const pts = usable
+      .map((r, i) => ({ i, v: r[key] }))
+      .filter((p): p is { i: number; v: number } => p.v !== null);
+    if (pts.length === 0) return '';
+    return pts.map((p, n) => `${n === 0 ? 'M' : 'L'}${x(p.i).toFixed(1)},${y(p.v).toFixed(1)}`).join(' ');
+  };
+
+  const gridLines = [0, 0.25, 0.5, 0.75, 1]
+    .map((f) => {
+      const gy = PAD.top + plotH - f * plotH;
+      return `<line x1="${PAD.left}" y1="${gy.toFixed(1)}" x2="${W - PAD.right}" y2="${gy.toFixed(1)}" class="chart__grid" />
+              <text x="${PAD.left - 10}" y="${(gy + 4).toFixed(1)}" class="chart__tick" text-anchor="end">${
+                axisTick(ceiling * f)
+              }</text>`;
+    })
+    .join('');
+
+  const dots = (key: 'download' | 'upload', cls: string) =>
+    usable
+      .map((r, i) => {
+        const v = r[key];
+        if (v === null) return '';
+        const title = `${formatWhen(r.recordedAt)} — ${clientLabel(r)}\n${key}: ${
+          formatBandwidth(v).value
+        } ${formatBandwidth(v).unit}`;
+        return `<circle cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="3" class="${cls}"><title>${esc(
+          title,
+        )}</title></circle>`;
+      })
+      .join('');
+
+  ui.chart.innerHTML = `
+    <svg viewBox="0 0 ${W} ${H}" class="chart__svg" role="img"
+         aria-label="Download and upload bandwidth over the most recent runs">
+      ${gridLines}
+      <path d="${path('download')}" class="chart__line chart__line--down" />
+      <path d="${path('upload')}" class="chart__line chart__line--up" />
+      ${dots('download', 'chart__dot chart__dot--down')}
+      ${dots('upload', 'chart__dot chart__dot--up')}
+      <text x="${PAD.left}" y="${H - 8}" class="chart__tick">oldest</text>
+      <text x="${W - PAD.right}" y="${H - 8}" class="chart__tick" text-anchor="end">newest</text>
+    </svg>
+    <div class="chart__legend">
+      <span class="chart__key chart__key--down">Download</span>
+      <span class="chart__key chart__key--up">Upload</span>
+    </div>`;
+}
+
+/**
+ * A short axis label.
+ *
+ * Deliberately more compact than the headline formatter: axis ticks are round
+ * numbers by construction, so the decimal place is noise, and a long label
+ * either widens the gutter or gets clipped.
+ */
+export function axisTick(bps: number): string {
+  if (bps <= 0) return '0';
+  if (bps >= 1e9) {
+    const g = bps / 1e9;
+    return `${Number.isInteger(g) ? g : g.toFixed(1)} Gbps`;
+  }
+  if (bps >= 1e6) return `${Math.round(bps / 1e6)} Mbps`;
+  return `${Math.round(bps / 1e3)} kbps`;
+}
+
+/** Rounds an axis maximum up to 1, 2 or 5 times a power of ten. */
+export function niceCeiling(max: number): number {
+  if (max <= 0) return 1;
+  const pow = 10 ** Math.floor(Math.log10(max));
+  const scaled = max / pow;
+  const step = scaled <= 1 ? 1 : scaled <= 2 ? 2 : scaled <= 5 ? 5 : 10;
+  return step * pow;
+}
+
+function renderRows(runs: StoredRun[]): void {
+  if (runs.length === 0) {
+    ui.rows.innerHTML = '';
+    ui.empty.hidden = false;
+    return;
+  }
+  ui.empty.hidden = true;
+
+  ui.rows.innerHTML = runs
+    .map((r) => {
+      const down = formatBandwidth(r.download ?? undefined);
+      const up = formatBandwidth(r.upload ?? undefined);
+      const ratings = Object.entries(r.scores)
+        .map(([k, v]) => `<span class="pill rating--${esc(v)}" title="${esc(k)}">${esc(v)}</span>`)
+        .join(' ');
+      return `<tr>
+        <td>${esc(formatWhen(r.recordedAt))}</td>
+        <td class="cell--client" title="${esc(r.userAgent)}">${esc(clientLabel(r))}</td>
+        <td class="cell--num">${down.value}<span class="cell--unit"> ${down.unit}</span></td>
+        <td class="cell--num">${up.value}<span class="cell--unit"> ${up.unit}</span></td>
+        <td class="cell--num">${esc(formatLatency(r.latency))}</td>
+        <td class="cell--num">${esc(formatLatency(r.downLoadedLatency))}</td>
+        <td class="cell--num">${esc(formatPacketLoss(r.packetLoss ?? undefined))}</td>
+        <td class="cell--ratings">${ratings}</td>
+        <td class="cell--profile">${esc(r.profile)}</td>
+      </tr>`;
+    })
+    .join('');
+}
+
+async function load(): Promise<void> {
+  ui.error.hidden = true;
+
+  const filter = ui.clientFilter.value || 'all';
+  const params = new URLSearchParams({ limit: '200' });
+  if (filter !== 'all') params.set('client', filter);
+
+  const res = await fetch(`/api/history?${params}`, { cache: 'no-store' });
+  if (!res.ok) throw new Error(`/api/history responded ${res.status}`);
+  const runs = (await res.json()) as StoredRun[];
+
+  ui.count.textContent = runs.length === 1 ? '1 run' : `${runs.length} runs`;
+  renderChart(runs);
+  renderRows(runs);
+  document.body.dataset.historyState = 'loaded';
+}
+
+async function loadClients(): Promise<void> {
+  const res = await fetch('/api/clients', { cache: 'no-store' });
+  if (!res.ok) return;
+  const clients = (await res.json()) as ClientSummary[];
+
+  const options = ['<option value="all">All clients</option>']
+    .concat(
+      clients.map(
+        (c) =>
+          `<option value="${esc(c.clientIp)}">${esc(clientLabel(c))} (${c.runs})</option>`,
+      ),
+    )
+    .join('');
+  ui.clientFilter.innerHTML = options;
+}
+
+ui.clientFilter.addEventListener('change', () => {
+  void load().catch(showError);
+});
+
+function showError(e: unknown): void {
+  ui.error.textContent = e instanceof Error ? e.message : String(e);
+  ui.error.hidden = false;
+  document.body.dataset.historyState = 'error';
+}
+
+void (async () => {
+  try {
+    await loadClients();
+    await load();
+  } catch (e) {
+    showError(e);
+  }
+})();

@@ -8,6 +8,56 @@ commit, then tag.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-24
+
+Results history. Runs no longer vanish when the tab closes.
+
+### Added
+
+- **SQLite-backed history.** Every completed run is POSTed back and stored with
+  its timestamp, client address, user agent, profile, full summary and quality
+  ratings. The raw engine summary is kept verbatim alongside the extracted
+  columns, so a metric without a column of its own is not lost.
+- **`/history` page**: a table of stored runs and a hand-drawn SVG trend chart
+  of download and upload, with a per-client filter. No charting library — the
+  front end's only dependency stays the measurement engine itself.
+- `GET /api/history` (with `?client=mine|all|<ip>` and `?limit=`),
+  `GET /api/clients`, `POST /api/results`.
+- `client_names` table and lookup, so the `[later]` friendly-naming feature
+  needs no migration when it arrives.
+- `historyEnabled` on `/api/status`; the front end hides the history link when
+  the deployment does not keep results.
+
+### Notable behaviour
+
+- **Attribution comes from the connection, never a header.** Trusting
+  `X-Forwarded-For` would let any client file a run under any address, and
+  there is no proxy in front of this service. Asserted by a test that sends a
+  spoofed header and checks it is ignored.
+- Storing a result is best-effort: a storage failure never presents as a failed
+  speed test, because the measurement itself succeeded.
+- History is optional. With no database path configured the endpoints degrade
+  quietly — `POST /api/results` returns 202 rather than an error — so the front
+  end does not need to know whether this deployment keeps results.
+- A run with no measurements at all is refused rather than stored; a partial
+  run is kept, because it is still a real observation.
+
+### Fixed
+
+- Chart Y-axis labels were clipped by a too-narrow gutter, rendering
+  "250 Mbps" as "50 Mbps" — the chart read an order of magnitude slow, with no
+  error anywhere. Now uses a compact tick format and a wider gutter, with a
+  test that measures each label's bounding box against the SVG edge.
+
+### Tests
+
+- 8 history integration tests over a real socket, including the milestone's
+  done-when (three runs, two clients, correct attribution) and the
+  header-spoofing guard.
+- 5 Playwright tests: the run is stored, the page lists and charts it, the
+  client filter narrows it, nothing leaves the origin, and axis labels are not
+  clipped.
+
 ## [0.4.0] - 2026-08-24
 
 Provisioning and TLS. One command takes a Proxmox node from nothing to a
@@ -152,6 +202,7 @@ milestone increments.
 - Tier-4 hardware validation outstanding; releases stay pre-release until it
   passes.
 
-[Unreleased]: https://github.com/sremich/self-hosted-cloudflare-speedtest/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/sremich/self-hosted-cloudflare-speedtest/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v0.5.0
 [0.4.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v0.4.0
 [0.3.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v0.3.0

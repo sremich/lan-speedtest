@@ -63,6 +63,10 @@ pub struct ServerConfig {
     pub tls_cert_file: Option<String>,
     #[serde(default)]
     pub tls_key_file: Option<String>,
+    /// Where completed runs are stored. Empty disables history entirely, which
+    /// is what the contract tests and the e2e suite use.
+    #[serde(default = "default_history_db")]
+    pub history_db: String,
 }
 
 impl Default for ServerConfig {
@@ -75,6 +79,7 @@ impl Default for ServerConfig {
             tls_bind: default_tls_bind(),
             tls_cert_file: None,
             tls_key_file: None,
+            history_db: default_history_db(),
         }
     }
 }
@@ -181,6 +186,9 @@ fn default_static_dir() -> String {
 fn default_tls_bind() -> String {
     "0.0.0.0:443".to_string()
 }
+fn default_history_db() -> String {
+    "data/history.db".to_string()
+}
 fn default_true() -> bool {
     true
 }
@@ -261,6 +269,11 @@ impl Config {
         }
         if let Some(v) = non_empty_env("SPEEDTEST_TLS_BIND") {
             self.server.tls_bind = v;
+        }
+        if let Ok(v) = std::env::var("SPEEDTEST_HISTORY_DB") {
+            // Deliberately accepts an empty value: that is how history is
+            // turned off, so `non_empty_env` would be wrong here.
+            self.server.history_db = v.trim().to_string();
         }
         if let Some(v) = non_empty_env("SPEEDTEST_TLS_CERT_FILE") {
             self.server.tls_cert_file = Some(v);

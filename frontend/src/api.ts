@@ -13,6 +13,7 @@ export interface Status {
   version: string;
   gitSha: string;
   profile: string;
+  historyEnabled: boolean;
 }
 
 export interface EngineConfig {
@@ -89,5 +90,30 @@ export function assertLanOnly(cfg: EngineConfig): void {
 
   if (problems.length > 0) {
     throw new Error(`Refusing to start — configuration would leave the LAN:\n- ${problems.join('\n- ')}`);
+  }
+}
+
+/**
+ * Stores a completed run.
+ *
+ * Deliberately best-effort: a failure here must never surface as a failed
+ * speed test, because the measurement itself succeeded. The backend also
+ * accepts and ignores submissions when history is turned off, so the front end
+ * does not need to know whether this deployment keeps results.
+ */
+export async function submitResult(payload: {
+  summary: Record<string, unknown>;
+  scores: Record<string, string>;
+  profile: string;
+}): Promise<boolean> {
+  try {
+    const res = await fetch('/api/results', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return res.ok;
+  } catch {
+    return false;
   }
 }

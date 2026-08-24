@@ -3,7 +3,7 @@
 
 services:
   app:
-    image: ghcr.io/sremich/self-hosted-cloudflare-speedtest:v0.4.0
+    image: ghcr.io/sremich/self-hosted-cloudflare-speedtest:v0.5.0
     container_name: speedtest
     restart: unless-stopped
     env_file: .env
@@ -21,6 +21,8 @@ services:
       # Certificates are issued and renewed on the host by acme.sh; the renewal
       # hook restarts this service so the new material is picked up.
       - /etc/speedtest/tls:/etc/speedtest/tls:ro
+      # Stored run history. Gitignored on the host; survives image updates.
+      - ./data:/app/data
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/api/health"]
       interval: 30s

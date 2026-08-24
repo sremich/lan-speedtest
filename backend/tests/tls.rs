@@ -79,6 +79,7 @@ async fn serve_tls(cert: &Path, key: &Path) -> String {
     let state = AppState {
         payload: PayloadSource::new(4096),
         config: Arc::new(config),
+        history: None,
     };
 
     // Bind first to learn the port, then hand the socket to axum-server.

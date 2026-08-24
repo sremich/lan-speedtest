@@ -4,6 +4,20 @@ Versions are three-part `X.Y.Z`. While the major version is 0, every release is
 a GitHub pre-release — tier-4 validation (10 GbE saturation and a packet
 capture proving no external traffic) gates 1.0.0.
 
+## 0.5.0
+
+Results history.
+
+- Every completed run is stored in SQLite with its client, profile, full
+  summary and ratings; the raw engine summary is kept verbatim so nothing is
+  lost to a missing column.
+- `/history` lists runs and charts the download/upload trend, filterable by
+  client. Hand-drawn SVG rather than a charting library.
+- Client attribution comes from the connection, never from a header — a
+  spoofable header must not decide who a run belongs to.
+- History is optional and degrades quietly when disabled, so the front end
+  need not know whether this deployment keeps results.
+
 ## 0.4.0
 
 Provisioning and TLS.

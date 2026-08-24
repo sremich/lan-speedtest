@@ -1,3 +1,5 @@
+import { resolve } from 'node:path';
+
 import { defineConfig } from 'vite';
 
 // The backend serves the built assets in production, so everything is
@@ -9,9 +11,14 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
-    // A single bundle keeps the page a plain static asset for the Rust
-    // server: no code-splitting, no dynamic import paths to get wrong.
-    rollupOptions: { output: { manualChunks: undefined } },
+    rollupOptions: {
+      // Two pages, each a plain static asset for the Rust server to serve.
+      input: {
+        index: resolve(__dirname, 'index.html'),
+        history: resolve(__dirname, 'history.html'),
+      },
+      output: { manualChunks: undefined },
+    },
   },
   server: {
     proxy: {

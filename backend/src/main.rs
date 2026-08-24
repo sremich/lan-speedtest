@@ -6,7 +6,7 @@ use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 
 use lan_speedtest::routes;
-use lan_speedtest::{AppState, Config, PayloadSource, GIT_SHA, VERSION};
+use lan_speedtest::{AppState, Config, History, PayloadSource, GIT_SHA, VERSION};
 
 const DEFAULT_CONFIG_PATH: &str = "config/speedtest.toml";
 
@@ -59,9 +59,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .tls()
         .map(|(c, k)| (c.to_string(), k.to_string(), config.server.tls_bind.clone()));
 
+    // History is optional: an empty path turns it off, which is how the
+    // contract tests and the e2e suite run.
+    let history = if config.server.history_db.trim().is_empty() {
+        tracing::info!("history disabled (no database path configured)");
+        None
+    } else {
+        let path = PathBuf::from(&config.server.history_db);
+        let db = History::open(&path).map_err(|e| {
+            tracing::error!("could not open the history database at {path:?}: {e}");
+            e
+        })?;
+        tracing::info!(
+            "history at {} ({} runs stored)",
+            path.display(),
+            db.count().unwrap_or(0)
+        );
+        Some(Arc::new(db))
+    };
+
     let state = AppState {
         payload,
         config: Arc::new(config),
+        history,
     };
     let app = routes::router(state);
 
@@ -74,9 +94,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let http = {
         let app = app.clone();
         tokio::spawn(async move {
-            axum::serve(listener, app)
-                .with_graceful_shutdown(shutdown_signal())
-                .await
+            // `_with_connect_info` is what makes the peer address available;
+            // without it every stored run would be attributed to "unknown".
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(shutdown_signal())
+            .await
         })
     };
 
@@ -110,7 +135,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             axum_server::bind_rustls(addr, tls_config)
                 .handle(handle)
-                .serve(app.into_make_service())
+                .serve(app.into_make_service_with_connect_info::<std::net::SocketAddr>())
                 .await?;
             http.abort();
         }

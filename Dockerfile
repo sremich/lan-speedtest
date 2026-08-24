@@ -74,6 +74,10 @@ RUN setcap 'cap_net_bind_service=+ep' /usr/local/bin/lan-speedtest
 COPY --from=frontend /build/frontend/dist /app/static
 COPY config/speedtest.toml /app/config/speedtest.toml
 
+# History is written here. Created up front and owned by the runtime user, so a
+# bind-mounted volume inherits somewhere writable rather than failing at start.
+RUN install -d -o speedtest -g speedtest /app/data
+
 USER speedtest
 EXPOSE 8080 443
 

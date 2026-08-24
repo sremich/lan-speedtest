@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>History — LAN Speed Test</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>&#9889;</text></svg>" />
+  </head>
+  <body>
+    <main class="page">
+      <header class="page__head">
+        <h1 class="page__title">History</h1>
+        <div class="page__actions">
+          <span class="phase" id="count" data-testid="count"></span>
+          <select class="select" id="client-filter" data-testid="client-filter" aria-label="Filter by client">
+            <option value="all">All clients</option>
+          </select>
+          <a class="btn" href="/">Run a test</a>
+        </div>
+      </header>
+
+      <p class="error" id="error" data-testid="error" hidden></p>
+
+      <section class="chart" id="chart" data-testid="chart" aria-label="Bandwidth trend"></section>
+
+      <p class="note" id="empty" data-testid="empty" hidden>
+        No runs stored yet. Run a test and it will appear here.
+      </p>
+
+      <div class="table-wrap">
+        <table class="table" data-testid="table">
+          <thead>
+            <tr>
+              <th scope="col">When</th>
+              <th scope="col">Client</th>
+              <th scope="col" class="cell--num">Download</th>
+              <th scope="col" class="cell--num">Upload</th>
+              <th scope="col" class="cell--num">Latency</th>
+              <th scope="col" class="cell--num">Loaded ↓</th>
+              <th scope="col" class="cell--num">Loss</th>
+              <th scope="col">Suitability</th>
+              <th scope="col">Profile</th>
+            </tr>
+          </thead>
+          <tbody id="rows" data-testid="rows"></tbody>
+        </table>
+      </div>
+    </main>
+
+    <script type="module" src="/src/history.ts"></script>
+  </body>
+</html>

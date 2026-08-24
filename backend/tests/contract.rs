@@ -31,6 +31,7 @@ async fn serve(config_toml: &str) -> String {
     let state = AppState {
         payload: PayloadSource::new(config.server.download_chunk_bytes),
         config: Arc::new(config),
+        history: None,
     };
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

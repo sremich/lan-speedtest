@@ -13,12 +13,14 @@
 //!    before the request body is fully drained, upload figures become
 //!    fiction. `up()` therefore reads the body to completion first.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
 
 use axum::body::Body;
-use axum::extract::{Query, State};
-use axum::http::{header, HeaderValue, StatusCode};
+use axum::extract::{ConnectInfo, FromRequestParts, Query, State};
+use axum::http::request::Parts;
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
@@ -26,6 +28,7 @@ use serde::{Deserialize, Serialize};
 use tower_http::services::{ServeDir, ServeFile};
 
 use crate::config::{Config, Measurement};
+use crate::history::{self, History, HistoryError, ResultSubmission};
 use crate::payload::PayloadSource;
 
 /// The engine's parser requires this exact metric name (case-insensitive).
@@ -40,6 +43,9 @@ pub const GIT_SHA: &str = env!("APP_GIT_SHA");
 pub struct AppState {
     pub payload: PayloadSource,
     pub config: Arc<Config>,
+    /// Absent when history is disabled, which is how the contract tests and the
+    /// e2e suite run.
+    pub history: Option<Arc<History>>,
 }
 
 /// Query string of a measurement request.
@@ -97,8 +103,162 @@ pub fn router(state: AppState) -> Router {
         .route("/api/status", get(status))
         .route("/api/profile", get(profile))
         .route("/api/health", get(|| async { "ok" }))
+        .route("/api/results", post(record_result))
+        .route("/api/history", get(list_history))
+        .route("/api/clients", get(list_clients))
         .fallback_service(statics)
         .with_state(state)
+}
+
+/// The client's address, or `None` when the server was started without
+/// connect info (which is how the backend-only tests run).
+///
+/// Taken from the connection, never from a header. `X-Forwarded-For` is
+/// trivially spoofable and there is no proxy in front of this service anyway,
+/// so trusting it would let any client attribute a run to any address it liked.
+///
+/// Infallible on purpose: a missing peer address should degrade to "unknown"
+/// rather than reject an otherwise valid request.
+#[derive(Debug, Clone, Copy)]
+pub struct ClientAddr(pub Option<SocketAddr>);
+
+impl ClientAddr {
+    pub fn ip(&self) -> String {
+        self.0
+            .map(|a| a.ip().to_string())
+            .unwrap_or_else(|| "unknown".to_string())
+    }
+}
+
+impl<S: Send + Sync> FromRequestParts<S> for ClientAddr {
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        Ok(ClientAddr(
+            parts
+                .extensions
+                .get::<ConnectInfo<SocketAddr>>()
+                .map(|ConnectInfo(addr)| *addr),
+        ))
+    }
+}
+
+fn user_agent(headers: &HeaderMap) -> String {
+    headers
+        .get(header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .chars()
+        .take(300)
+        .collect()
+}
+
+impl IntoResponse for HistoryError {
+    fn into_response(self) -> Response {
+        let status = match self {
+            HistoryError::Db(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            HistoryError::Json(_) | HistoryError::NothingMeasured => StatusCode::BAD_REQUEST,
+            HistoryError::TooLarge { .. } => StatusCode::PAYLOAD_TOO_LARGE,
+        };
+        if status.is_server_error() {
+            tracing::error!("history: {self}");
+        }
+        (status, self.to_string()).into_response()
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Recorded {
+    id: i64,
+    recorded_at: String,
+}
+
+/// `POST /api/results` — store a completed run.
+async fn record_result(
+    State(state): State<AppState>,
+    client: ClientAddr,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    let Some(history) = state.history.as_ref() else {
+        // Not an error: history is optional, and the front end should not have
+        // to care whether this deployment keeps results.
+        return (StatusCode::ACCEPTED, "history is disabled").into_response();
+    };
+
+    if body.len() > history::MAX_SUMMARY_BYTES {
+        return HistoryError::TooLarge {
+            bytes: body.len(),
+            limit: history::MAX_SUMMARY_BYTES,
+        }
+        .into_response();
+    }
+
+    let submission: ResultSubmission = match serde_json::from_str(&body) {
+        Ok(s) => s,
+        Err(e) => return HistoryError::Json(e).into_response(),
+    };
+
+    let recorded_at = history::now_rfc3339();
+    match history.record(
+        &submission,
+        &client.ip(),
+        &user_agent(&headers),
+        &recorded_at,
+    ) {
+        Ok(id) => (
+            StatusCode::CREATED,
+            axum::Json(Recorded { id, recorded_at }),
+        )
+            .into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct HistoryQuery {
+    #[serde(default)]
+    limit: Option<u32>,
+    /// Restrict to one client. `mine` means the requesting address, which is
+    /// how the page offers "just this machine" without the browser needing to
+    /// know its own LAN address.
+    #[serde(default)]
+    client: Option<String>,
+}
+
+/// `GET /api/history` — stored runs, newest first.
+async fn list_history(
+    State(state): State<AppState>,
+    client: ClientAddr,
+    Query(q): Query<HistoryQuery>,
+) -> Response {
+    let Some(history) = state.history.as_ref() else {
+        return axum::Json(Vec::<()>::new()).into_response();
+    };
+
+    let me = client.ip();
+    let filter = match q.client.as_deref() {
+        None | Some("") | Some("all") => None,
+        Some("mine") => Some(me.as_str()),
+        Some(other) => Some(other),
+    };
+
+    match history.recent(q.limit.unwrap_or(100), filter) {
+        Ok(runs) => axum::Json(runs).into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+/// `GET /api/clients` — who has run tests, most recently active first.
+async fn list_clients(State(state): State<AppState>) -> Response {
+    let Some(history) = state.history.as_ref() else {
+        return axum::Json(Vec::<()>::new()).into_response();
+    };
+    match history.clients() {
+        Ok(clients) => axum::Json(clients).into_response(),
+        Err(e) => e.into_response(),
+    }
 }
 
 /// `GET /__down?bytes=N` — N bytes of throwaway payload.
@@ -207,6 +367,7 @@ struct Status {
     version: &'static str,
     git_sha: &'static str,
     profile: String,
+    history_enabled: bool,
 }
 
 async fn status(State(state): State<AppState>) -> impl IntoResponse {
@@ -214,6 +375,7 @@ async fn status(State(state): State<AppState>) -> impl IntoResponse {
         version: VERSION,
         git_sha: GIT_SHA,
         profile: state.config.profile.clone(),
+        history_enabled: state.history.is_some(),
     })
 }
 
