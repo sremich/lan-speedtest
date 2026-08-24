@@ -32,13 +32,30 @@ jobs:
             exit 1
           fi
 
-      # TODO(milestone-0): mirror the toolchain setup from ci.yml here.
+      - uses: dtolnay/rust-toolchain@stable
 
-      - name: Run tests
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Backend tests (tier 1 + throughput)
+        run: cargo test --manifest-path backend/Cargo.toml --release -- --nocapture
+
+      - name: Front-end typecheck and build
+        working-directory: frontend
         run: |
-          # TODO(milestone-0): replace with the project's real test command.
-          # Unlike ci.yml, a release with no working test command MUST fail.
-          make test
+          npm ci --no-audit --no-fund
+          npm run typecheck
+          npx vite build
+
+      - name: e2e (tier 2)
+        working-directory: frontend
+        run: |
+          cargo build --release --manifest-path ../backend/Cargo.toml
+          npx playwright install --with-deps chromium firefox
+          npx playwright test
 
   build-and-push:
     needs: verify

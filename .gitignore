@@ -24,6 +24,12 @@ dist/
 build/
 *.tsbuildinfo
 
+# --- test artefacts ---
+/frontend/test-results/
+/frontend/playwright-report/
+/frontend/blob-report/
+/frontend/.shot/
+
 # --- OS/editor ---
 .DS_Store
 Thumbs.db

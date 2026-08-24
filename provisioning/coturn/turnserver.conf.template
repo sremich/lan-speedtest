@@ -1,0 +1,79 @@
+# coturn configuration for the speed test guest.
+#
+# Written from scratch for this project. Placeholders marked @@LIKE_THIS@@ are
+# substituted by provisioning/coturn/install-coturn.sh from values in .env —
+# no credential is ever committed here.
+#
+# Why native rather than containerised: the relay needs a contiguous UDP port
+# range, and publishing ~40 UDP ports through Docker's userland proxy adds a
+# hop to the exact path we are trying to measure. See DECISIONS.md.
+#
+# Purpose: the engine's packet-loss stage opens two RTCPeerConnections in the
+# same browser tab and sends a UDP burst from one to the other *through this
+# relay*. Traffic goes browser -> relay -> same browser. The relay never talks
+# to anything outside the LAN.
+
+# --- listening ---------------------------------------------------------------
+listening-port=3478
+# Bind explicitly. Without this coturn enumerates every interface, which on a
+# multi-homed guest advertises candidates clients cannot reach.
+listening-ip=@@LISTEN_IP@@
+relay-ip=@@LISTEN_IP@@
+# LAN-only relay: the guest's address is the address peers should use, so no
+# external-ip mapping is needed. If this ever sits behind NAT, set
+# external-ip=PUBLIC/PRIVATE here.
+
+# --- relay port range --------------------------------------------------------
+# Deliberately narrow. The engine opens one relayed allocation per test, so a
+# few dozen ports covers concurrent runs with room to spare, and a small range
+# keeps the firewall rule and the LXC config readable.
+min-port=49160
+max-port=49200
+
+# --- authentication ----------------------------------------------------------
+# Long-term credentials. These necessarily reach the browser — the engine
+# builds the RTCPeerConnection client-side — so they are LAN-only values that
+# are never reused anywhere else.
+#
+# Short-lived HMAC credentials (use-auth-secret) minted per test by the backend
+# are the planned replacement; see the [later] item in the roadmap.
+lt-cred-mech
+realm=@@TURN_REALM@@
+user=@@TURN_USER@@:@@TURN_PASS@@
+
+# --- transport ---------------------------------------------------------------
+# The engine requests `turn:HOST:PORT?transport=udp` and its ICE candidate
+# filter accepts UDP only, so TCP relaying is dead weight.
+no-tcp-relay
+# No TLS listener: this is a LAN service and the WebRTC payload is DTLS-
+# encrypted end to end regardless.
+no-tls
+no-dtls
+
+# --- lock down what may be relayed ------------------------------------------
+# The relay must never become a path to anything but the LAN client itself.
+# Deny every address family we have no business reaching.
+no-multicast-peers
+denied-peer-ip=0.0.0.0-0.255.255.255
+denied-peer-ip=127.0.0.0-127.255.255.255
+denied-peer-ip=169.254.0.0-169.254.255.255
+denied-peer-ip=224.0.0.0-255.255.255.255
+denied-peer-ip=::1
+denied-peer-ip=fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+# No CLI or web admin: nothing needs to administer this at runtime.
+no-cli
+web-admin=false
+
+# --- limits ------------------------------------------------------------------
+# A single test allocates one relay; these bound a misbehaving or looping
+# client without getting in the way of normal use.
+user-quota=12
+total-quota=100
+max-bps=0
+
+# --- logging -----------------------------------------------------------------
+log-file=/var/log/turnserver.log
+simple-log
+# Verbose logging costs measurable CPU during a burst of 1000 small packets,
+# which is exactly when accuracy matters. Turn it on only while debugging.
+no-stdout-log

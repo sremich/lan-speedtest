@@ -1,14 +1,27 @@
 # Deploy compose file: pulls the prebuilt image from GHCR.
-# TODO(milestone-0): set the real image name, ports, volumes, env.
 # RULE: after every release goes green, bump the image tag pin here.
 
 services:
   app:
-    # TODO(milestone-0): ghcr.io/sremich/<repo-name>:v0.1.0   <- the pin to bump
-    image: ghcr.io/sremich/CHANGE-ME:v0.0.0
+    image: ghcr.io/sremich/self-hosted-cloudflare-speedtest:v0.3.0
+    container_name: speedtest
     restart: unless-stopped
     env_file: .env
-    # ports:
-    #   - "8080:8080"
-    # volumes:
-    #   - ./data:/app/data
+    # Host networking: the measurement path should not cross a NAT hop, and
+    # coturn runs natively on the same guest. See DECISIONS.md.
+    network_mode: host
+    volumes:
+      # Bind-mounted so the measurement profile can be retuned and the service
+      # restarted without pulling a new image.
+      - ./config/speedtest.toml:/app/config/speedtest.toml:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/api/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

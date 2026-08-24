@@ -1,81 +1,92 @@
-# project-scaffold
+# lan-speedtest
 
-Template repository for starting new agent-built projects. Encodes the
-conventions proven across companion-ppt-helper, closed-caption-generation,
-and netbox-monitor so every project starts with them instead of
-rediscovering them: CI-owned releases, single-source versioning, doc/audit
-workflow, handover discipline, and testing tiers.
+A LAN speed test in the spirit of speed.cloudflare.com — download, upload, idle
+and loaded latency, jitter, packet loss and quality ratings — that runs
+entirely inside your own network and never contacts Cloudflare's edge.
 
-> **In a spawned project?** This README gets replaced by the project's real
-> README (Haiku writes it during milestone 0). The rules live in
-> `source-files/initial-prompt.txt` and, as they grow, in `CLAUDE.md`.
+Cloudflare open-sourced their measurement engine as
+[`@cloudflare/speedtest`](https://github.com/cloudflare/speedtest), but not the
+site that drives it. This project is the rest: a Rust backend that satisfies the
+engine's endpoint contract, a front end that drives it, a coturn relay for the
+packet-loss stage, and the provisioning to stand it up.
 
-## Starting a new project
+Built for a home lab, where the useful question is not "how fast is the pipe"
+but "is this connection healthy" — which is exactly what latency under load,
+jitter and packet loss answer and a plain throughput test does not.
 
-1. Create the repo from this template:
+## What it measures
 
-   ```bash
-   gh repo create sremich/NEW-PROJECT --template sremich/project-scaffold --private --clone
-   ```
+| | |
+|---|---|
+| Download / upload | Bandwidth in each direction |
+| Latency, idle | Round trip on an unloaded link |
+| Latency, loaded | Round trip while saturating down and up — the number that exposes bufferbloat |
+| Jitter | Variation in round trip |
+| Packet loss | UDP burst relayed back to the browser through your own TURN server |
+| Suitability | Streaming, gaming and video-call ratings, from the engine's own scoring |
 
-   (Or clone into the OneDrive projects folder if it should roam:
-   `git clone https://github.com/sremich/NEW-PROJECT` there.)
+## Nothing leaves your network
 
-2. Fill in `initial-prompt-template.md` — every `[BRACKETED]` placeholder,
-   delete the `TIP:` lines — and save it as
-   `source-files/initial-prompt.txt` (gitignored; add any input materials
-   to `source-files/` too).
+This is the property the project exists for, so it is enforced in four places
+rather than trusted:
 
-3. Start the agent with:
+- The engine's result-reporting endpoint is pinned to `null` server-side. Left
+  alone, it POSTs every completed run to Cloudflare.
+- The front end re-checks the configuration before starting and refuses to run
+  if anything could reach off-LAN.
+- A contract test asserts the served configuration contains no absolute URLs.
+- An end-to-end test drives a full run in a real browser and fails if a single
+  request leaves the origin.
 
-   > please look at the "initial-prompt.txt" in the source-files folder for
-   > the initial prompt
+The only external interaction anywhere in the project is the ACME DNS-01
+challenge at certificate-renewal time — on the guest, on a timer, never during
+a test.
 
-4. The agent restates the system, asks clarifying questions, proposes a
-   milestone plan, and does **milestone 0** (below) as part of 0.1.0.
+## Quick start
 
-## What's in the scaffold
-
-| Path | Purpose |
-|------|---------|
-| `initial-prompt-template.md` | The fillable initial prompt (the only file you edit by hand) |
-| `.github/workflows/ci.yml` | Tests on every push |
-| `.github/workflows/release.yml` | On `v*` tag: verify tag==VERSION → refuse unfinished scaffold → test → build+push GHCR image (version+SHA baked in, smoke-pull with retry) → GitHub release (auto pre-release while 0.x) |
-| `VERSION` | The **only** place the version lives (always X.Y.Z) |
-| `scripts/check-version.sh` | Enforces tag/VERSION agreement and three-part format |
-| `Dockerfile`, `docker-compose.yml`, `.env.example` | Stubs with `TODO(milestone-0)` markers; compose carries the image pin to bump each release |
-| `CHANGELOG.md` | Keep-a-Changelog stub |
-| `templates/HANDOVER.md` | Roaming agent context skeleton (session-close checklist, cold start, environment map) |
-| `templates/CLAUDE.md` | Working-notes skeleton (commands, testing tiers, release checklist, house conventions) |
-| `templates/DECISIONS.md` | Append-only decisions / hard-won lessons |
-| `.gitignore` | Pre-set: `source-files/`, HANDOVER/CLAUDE/DECISIONS, `.env`, `data/`, logs, venvs |
-
-## Milestone 0 (the agent does this)
-
-Resolve every `TODO(milestone-0)` marker — the release workflow **refuses to
-run while any remain**:
-
-- [ ] `ci.yml` / `release.yml`: real toolchain setup + test command
-- [ ] `Dockerfile`: real build (keep the `VERSION`/`GIT_SHA` build args and
-      surface them in the app — web UI footer, `--version`, or `/api/status`)
-- [ ] `docker-compose.yml`: real image name, ports, volumes
-- [ ] `.env.example`: real variables with safe placeholders
-- [ ] Copy `templates/{HANDOVER,CLAUDE,DECISIONS}.md` to the repo root and
-      fill their placeholders (they're gitignored there — OneDrive-only)
-- [ ] Wiki home page: private repo → create `docs/wiki/Home.md` in the repo
-      itself (never the wiki section); public repo → ask Stephen to create
-      the first wiki page in the web UI (GitHub has no wiki API; `.wiki.git`
-      doesn't exist until then)
-- [ ] Replace this README with the project's real README (Haiku writes,
-      Sonnet audits)
-
-## Release model (memorize this shape)
-
-```
-CHANGELOG Unreleased → vX.Y.Z   →  bump VERSION  →  commit + push
-→  push annotated tag vX.Y.Z    →  CI does everything else
-→  when green: bump compose pin →  run CLAUDE.md release checklist
+```sh
+cp .env.example .env          # fill in; never commit it
+docker compose up -d
 ```
 
-Never create releases, push images, or edit tags by hand — if CI fails, no
-partial release exists; fix and re-tag.
+Then open the host in a browser. The test starts on load.
+
+To run from source, see [docs/wiki/Development.md](docs/wiki/Development.md).
+
+## Configuration
+
+One TOML file with named measurement profiles — `lan-1g`, `lan-10g`, `quick` —
+selectable with `SPEEDTEST_PROFILE` and applied on restart, no rebuild.
+
+Profiles matter more than they look. The engine's defaults are tuned for
+internet paths and are actively wrong on a LAN: leave
+`loadedRequestMinDuration` at its 250 ms default and no LAN transfer is slow
+enough to count as loading the connection, so loaded latency is never measured
+— which silently removes **every** quality rating, with no error shown.
+[docs/wiki/Configuration.md](docs/wiki/Configuration.md) covers the sizing
+rules.
+
+## Documentation
+
+The [wiki](docs/wiki/Home.md) is the reference.
+[Engine Contract](docs/wiki/Engine-Contract.md) is the page to read before
+touching the backend: it records the `@cloudflare/speedtest` request and
+response contract as verified from the package's own sources, along with the
+two engine behaviours that shape the whole design.
+
+## Status
+
+Pre-1.0 and pre-release by policy. The backend, front end and packet-loss relay
+work and are covered by tests at two tiers. Guest provisioning and TLS
+automation (0.4.0) and results history (0.5.0) are still to come; 1.0.0 is
+gated on 10 GbE validation and a packet capture on real hardware.
+
+One limitation worth knowing up front: the engine measures with a **single**
+sequential HTTP stream and reads every response body through `r.text()`, so
+browser-reported download speed is bounded by that design rather than by your
+link. The backend is verified separately not to be the bottleneck, and a
+parallel-stream throughput harness is planned for 0.6.0 as a distinct number.
+
+## Licence
+
+Not currently licensed for redistribution. `@cloudflare/speedtest` is MIT.

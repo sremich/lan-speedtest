@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>LAN Speed Test</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>&#9889;</text></svg>" />
+  </head>
+  <body>
+    <main class="page">
+      <header class="page__head">
+        <h1 class="page__title">LAN Speed Test</h1>
+        <div class="page__actions">
+          <span class="phase" id="phase" data-testid="phase">Starting…</span>
+          <button class="btn" id="restart" data-testid="restart" type="button" disabled>
+            Test again
+          </button>
+        </div>
+      </header>
+
+      <div class="progress" role="progressbar" aria-label="Test progress">
+        <div class="progress__bar" id="progress"></div>
+      </div>
+
+      <p class="error" id="error" data-testid="error" hidden></p>
+
+      <section class="bandwidth" aria-label="Bandwidth">
+        <article class="metric metric--hero">
+          <h2 class="metric__label">Download</h2>
+          <p class="metric__value" id="download" data-testid="download">—</p>
+          <p class="metric__unit" id="download-unit"></p>
+        </article>
+        <article class="metric metric--hero">
+          <h2 class="metric__label">Upload</h2>
+          <p class="metric__value" id="upload" data-testid="upload">—</p>
+          <p class="metric__unit" id="upload-unit"></p>
+        </article>
+      </section>
+
+      <section class="grid" aria-label="Latency and loss">
+        <article class="metric">
+          <h2 class="metric__label">Latency <span class="metric__qualifier">idle</span></h2>
+          <p class="metric__value metric__value--sm" id="latency" data-testid="latency">—</p>
+        </article>
+        <article class="metric">
+          <h2 class="metric__label">Jitter <span class="metric__qualifier">idle</span></h2>
+          <p class="metric__value metric__value--sm" id="jitter" data-testid="jitter">—</p>
+        </article>
+        <article class="metric">
+          <h2 class="metric__label">Latency <span class="metric__qualifier">loaded ↓</span></h2>
+          <p class="metric__value metric__value--sm" id="down-loaded" data-testid="down-loaded">—</p>
+        </article>
+        <article class="metric">
+          <h2 class="metric__label">Latency <span class="metric__qualifier">loaded ↑</span></h2>
+          <p class="metric__value metric__value--sm" id="up-loaded" data-testid="up-loaded">—</p>
+        </article>
+        <article class="metric">
+          <h2 class="metric__label">Packet loss</h2>
+          <p class="metric__value metric__value--sm" id="packet-loss" data-testid="packet-loss">—</p>
+        </article>
+        <article class="metric">
+          <h2 class="metric__label">Duration</h2>
+          <p class="metric__value metric__value--sm" id="duration" data-testid="duration">—</p>
+        </article>
+      </section>
+
+      <section class="aim" aria-label="Quality ratings">
+        <h2 class="section__title">Suitability</h2>
+        <div class="aim__row" id="aim" data-testid="aim"></div>
+      </section>
+
+      <p class="note" id="precision-note" hidden></p>
+
+      <footer class="page__foot">
+        <span id="profile" data-testid="profile"></span>
+        <span id="build" data-testid="build"></span>
+      </footer>
+    </main>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,14 +1,78 @@
-# TODO(milestone-0): replace this stub with the project's real build.
-# Keep the VERSION/GIT_SHA build args — the release workflow passes them,
-# and the app must surface them (web UI footer, --version, /api/status).
+# Two build stages, one small runtime image.
+#
+# VERSION and GIT_SHA come from the release workflow and are surfaced by the
+# app at /api/status and in the page footer.
 
-FROM alpine:3.20
+# --- front end ---------------------------------------------------------------
+FROM node:22-bookworm-slim AS frontend
 
-ARG VERSION=dev
+WORKDIR /build/frontend
+# Dependencies first so a source-only change does not reinstall the engine.
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+
+COPY frontend/tsconfig.json frontend/vite.config.ts frontend/index.html ./
+COPY frontend/src ./src
+RUN npx tsc --noEmit && npx vite build
+
+
+# --- backend -----------------------------------------------------------------
+FROM rust:1.90-bookworm AS backend
+
+ARG VERSION=0.0.0
 ARG GIT_SHA=unknown
 ENV APP_VERSION=${VERSION} \
     APP_GIT_SHA=${GIT_SHA}
 
-# TODO(milestone-0): build/copy the application here.
+WORKDIR /build
 
-CMD ["sh", "-c", "echo \"scaffold stub — APP_VERSION=$APP_VERSION APP_GIT_SHA=$APP_GIT_SHA\""]
+# Warm the dependency cache against a stub main, so editing our own sources
+# does not rebuild the whole tree every time.
+COPY backend/Cargo.toml backend/Cargo.lock ./backend/
+RUN mkdir -p backend/src \
+    && echo 'fn main() {}' > backend/src/main.rs \
+    && echo '' > backend/src/lib.rs \
+    && echo '0.0.0' > VERSION \
+    && printf 'fn main() {}\n' > backend/build.rs \
+    && cargo build --release --manifest-path backend/Cargo.toml \
+    && rm -rf backend/src backend/build.rs
+
+COPY VERSION ./VERSION
+COPY backend/build.rs ./backend/build.rs
+COPY backend/src ./backend/src
+# Cargo skips rebuilding untouched units; force ours to be rebuilt with the
+# real sources and the real version.
+RUN touch backend/src/main.rs backend/src/lib.rs \
+    && cargo build --release --manifest-path backend/Cargo.toml \
+    && strip backend/target/release/lan-speedtest
+
+
+# --- runtime -----------------------------------------------------------------
+FROM debian:bookworm-slim AS runtime
+
+ARG VERSION=0.0.0
+ARG GIT_SHA=unknown
+ENV APP_VERSION=${VERSION} \
+    APP_GIT_SHA=${GIT_SHA} \
+    SPEEDTEST_CONFIG=/app/config/speedtest.toml \
+    SPEEDTEST_STATIC_DIR=/app/static \
+    SPEEDTEST_BIND=0.0.0.0:8080
+
+# ca-certificates is not needed: this service makes no outbound requests.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --uid 10001 --no-create-home speedtest
+
+WORKDIR /app
+COPY --from=backend /build/backend/target/release/lan-speedtest /usr/local/bin/lan-speedtest
+COPY --from=frontend /build/frontend/dist /app/static
+COPY config/speedtest.toml /app/config/speedtest.toml
+
+USER speedtest
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:8080/api/health || exit 1
+
+ENTRYPOINT ["/usr/local/bin/lan-speedtest"]

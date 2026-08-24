@@ -8,5 +8,93 @@ commit, then tag.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-24
+
+Milestones 0 through 3 delivered in one pass: scaffold resolved, backend, front
+end, and packet-loss relay. First release; the version reflects three +0.1.0
+milestone increments.
+
 ### Added
-- Project scaffolding from `project-scaffold`.
+
+**Backend (Rust/Axum)**
+
+- `/__down` and `/__up` implementing the `@cloudflare/speedtest` 1.13.1
+  contract, including the zero-byte latency ping (the engine has no separate
+  ping endpoint).
+- Zero-copy download payloads: refcounted slices of one pre-allocated buffer,
+  with an exact size hint so a real `content-length` is sent rather than
+  chunked framing.
+- Upload bodies drained frame by frame and answered only once complete, since
+  upload speed is derived from time-to-first-byte alone.
+- `server-timing: cfRequestDuration;dur=N` — the only spelling the engine's
+  parser accepts.
+- `no-store` on measurement responses, so repeat requests are not served from
+  the browser cache.
+- Static serving of the built front end; `/api/status` (version, git SHA,
+  profile), `/api/profile` (engine configuration), `/api/health`.
+- Per-request transfer cap, validated against the active profile at startup.
+
+**Front end (TypeScript/Vite)**
+
+- Drives the engine directly: auto-start on load, live updates, and a final
+  summary of download, upload, idle and loaded latency, jitter, packet loss and
+  duration.
+- AIM suitability ratings for streaming, gaming and video calls.
+- Dark theme; version and git SHA in the footer.
+- Pre-flight check that refuses to start a run whose configuration could reach
+  off-LAN, naming the specific problem.
+- Explicit note when latency readings sit at the browser's timing resolution,
+  rather than implying precision that does not exist.
+- Explanatory message when the engine returns no ratings, instead of an empty
+  panel.
+
+**Packet loss / TURN**
+
+- coturn configuration written from scratch, with peers denied to loopback,
+  link-local and multicast ranges.
+- Idempotent installer that renders the template from environment values,
+  refuses to proceed with unsubstituted placeholders, restarts only on change,
+  and verifies the listener.
+- Containerised relay for tier-2 testing.
+
+**Configuration**
+
+- Named measurement profiles (`lan-1g`, `lan-10g`, `quick`, `e2e-packetloss`)
+  in one TOML file, selectable by environment without a rebuild.
+- `loaded_request_min_duration` and `loaded_latency_throttle` exposed per
+  profile and tuned for LAN speeds — the engine's defaults silently suppress
+  loaded latency and every quality rating on a fast link.
+- Unknown configuration keys rejected outright.
+
+**Testing and CI**
+
+- 33 backend tests: config parsing, payload body, and the engine contract
+  driven over a real socket.
+- Playwright suite in Chromium and Firefox, including a full-run assertion that
+  no request leaves the origin.
+- Packet-loss suite against real coturn, including an automated Trickle-ICE
+  equivalent that fails when no `relay` candidate is gathered.
+- Loopback throughput floor, best-of-three, printing the achieved figure.
+- CI jobs for tier 1, tier 2, packet loss, and a built-image smoke test that
+  checks the baked-in version, the served front end and the `server-timing`
+  header.
+- Release workflow wired to the real toolchain.
+
+**Documentation**
+
+- Wiki under `docs/wiki/`, including the engine contract as verified from the
+  package's own sources.
+- README, deployment and troubleshooting notes.
+
+### Known limitations
+
+- Browser-reported download speed is bounded by the engine's single-stream,
+  `r.text()`-decoding design rather than by the link. A parallel-stream harness
+  is planned for 0.6.0 and will be reported separately.
+- Guest provisioning and TLS automation are not yet implemented (0.4.0).
+- Results are not persisted (0.5.0).
+- Tier-4 hardware validation outstanding; releases stay pre-release until it
+  passes.
+
+[Unreleased]: https://github.com/sremich/self-hosted-cloudflare-speedtest/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v0.3.0

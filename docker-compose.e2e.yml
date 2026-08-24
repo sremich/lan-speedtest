@@ -1,0 +1,41 @@
+# Tier-2 support: a coturn relay so the packet-loss stage can actually run
+# under test. Not a deployment file — production runs coturn natively on the
+# guest (see DECISIONS.md and provisioning/coturn/).
+#
+#   docker compose -f docker-compose.e2e.yml up -d
+#   SPEEDTEST_TURN_ENABLED=true SPEEDTEST_TURN_URI=127.0.0.1:3478 \
+#   SPEEDTEST_TURN_USER=e2e SPEEDTEST_TURN_PASS=e2e-not-a-secret \
+#   SPEEDTEST_PROFILE=e2e-packetloss ./backend/target/release/lan-speedtest
+
+services:
+  coturn:
+    image: coturn/coturn:4.6-alpine
+    container_name: speedtest-e2e-coturn
+    # Host networking: WebRTC relays need the relay port range reachable at
+    # the same address the candidate advertises, and publishing 40 UDP ports
+    # through the userland proxy is both slow and fiddly.
+    network_mode: host
+    command:
+      - --listening-port=3478
+      - --listening-ip=127.0.0.1
+      - --relay-ip=127.0.0.1
+      - --min-port=49160
+      - --max-port=49200
+      - --lt-cred-mech
+      - --realm=e2e.test
+      # Test-only credentials. Deliberately obvious, never used anywhere real.
+      - --user=e2e:e2e-not-a-secret
+      # Required here and ONLY here. The engine gives each of its two peer
+      # connections its own relay allocation and sets iceTransportPolicy
+      # 'relay', so one allocation must forward to the other — and on this
+      # setup both live on 127.0.0.1. coturn denies loopback peers by default,
+      # which shows up as "ICE connection timeout!" rather than a permission
+      # error. Production relays on the guest's LAN address and must keep the
+      # loopback denial (see provisioning/coturn/turnserver.conf.template).
+      - --allow-loopback-peers
+      - --no-tcp-relay
+      - --no-tls
+      - --no-dtls
+      - --no-cli
+      - --log-file=stdout
+      - --simple-log

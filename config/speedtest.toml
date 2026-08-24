@@ -1,0 +1,137 @@
+# lan-speedtest configuration.
+#
+# The active profile decides what the browser-side engine actually measures.
+# Change `profile` (or set SPEEDTEST_PROFILE) and restart — no rebuild needed.
+#
+# Measurement entries mirror `MeasurementConfig` from @cloudflare/speedtest
+# 1.13.1 exactly, camelCase included, so they can be read straight against the
+# engine's own documentation. See docs/wiki/Engine-Contract.md.
+#
+# Sizing note: the engine stops issuing further rounds of a direction once a
+# single request takes longer than `bandwidthFinishRequestDuration` (1000 ms).
+# On a LAN almost nothing reaches that, so every stage listed here will run —
+# keep the lists short and the transfers large.
+
+profile = "lan-1g"
+
+[server]
+bind = "0.0.0.0:8080"
+# Hard ceiling on a single transfer. Startup fails if a profile exceeds it.
+max_transfer_bytes = 2147483648
+# Shared, pre-allocated download buffer sliced per request. Never per-request
+# allocation — that would make the backend the bottleneck it exists to avoid.
+download_chunk_bytes = 4194304
+static_dir = "static"
+
+[turn]
+# Enables the packet-loss stage. When false the stage is stripped from the
+# profile handed to the browser, so the engine does not stall on a relay that
+# is not there. Credentials reach the browser by necessity — LAN-only values,
+# never reused elsewhere. Supply the password via SPEEDTEST_TURN_PASS.
+enabled = false
+uri = ""
+user = ""
+pass = ""
+
+
+# --- 1 GbE clients -----------------------------------------------------------
+# 1 Gbps ~= 125 MB/s, so 25 MB lands near 200 ms and 100 MB near 800 ms.
+[profiles.lan-1g]
+description = "1 GbE LAN client"
+estimated_server_time = 0.0
+measure_download_loaded_latency = true
+measure_upload_loaded_latency = true
+# Engine defaults (250 / 400) discard every LAN-speed transfer and leave the
+# AIM ratings empty. 25 MB at 1 Gbps is ~200 ms, so the threshold must sit
+# below that. See docs/wiki/Engine-Contract.md.
+loaded_request_min_duration = 50.0
+loaded_latency_throttle = 50.0
+measurements = [
+  { type = "latency", numPackets = 2 },
+  { type = "download", bytes = 1000000, count = 1, bypassMinDuration = true },
+  { type = "latency", numPackets = 20 },
+  { type = "download", bytes = 25000000, count = 4 },
+  { type = "latency", numPackets = 2 },
+  { type = "upload", bytes = 25000000, count = 4 },
+  { type = "latency", numPackets = 2 },
+  { type = "packetLoss", numPackets = 1000, batchSize = 10, batchWaitTime = 10, responsesWaitTime = 3000 },
+  { type = "download", bytes = 100000000, count = 4 },
+  { type = "latency", numPackets = 2 },
+  { type = "upload", bytes = 50000000, count = 4 },
+  { type = "latency", numPackets = 2 },
+]
+
+
+# --- 10 GbE clients ----------------------------------------------------------
+# 10 Gbps ~= 1.25 GB/s, so 250 MB lands near 200 ms. Sizes stop at 250 MB on
+# purpose: the engine reads every response body through `r.text()`, and larger
+# payloads cost more in browser string decoding than they buy in measurement.
+[profiles.lan-10g]
+description = "10 GbE LAN client"
+estimated_server_time = 0.0
+measure_download_loaded_latency = true
+measure_upload_loaded_latency = true
+# Critical here: 250 MB at 10 Gbps is only ~200 ms and the smallest upload
+# (50 MB) only ~40 ms, so with the engine's 250 ms
+# default NOTHING would count as loading the connection and the whole
+# quality-rating section would silently disappear.
+loaded_request_min_duration = 25.0
+loaded_latency_throttle = 25.0
+measurements = [
+  { type = "latency", numPackets = 2 },
+  { type = "download", bytes = 10000000, count = 1, bypassMinDuration = true },
+  { type = "latency", numPackets = 20 },
+  { type = "download", bytes = 100000000, count = 4 },
+  { type = "latency", numPackets = 2 },
+  { type = "upload", bytes = 50000000, count = 4 },
+  { type = "latency", numPackets = 2 },
+  { type = "packetLoss", numPackets = 1000, batchSize = 10, batchWaitTime = 10, responsesWaitTime = 3000 },
+  { type = "download", bytes = 250000000, count = 4 },
+  { type = "latency", numPackets = 2 },
+  { type = "upload", bytes = 100000000, count = 3 },
+  { type = "latency", numPackets = 2 },
+]
+
+
+# --- Quick check -------------------------------------------------------------
+# Small and fast. Used by the e2e suite and handy for smoke-testing a new
+# deployment without waiting out a full run.
+[profiles.quick]
+description = "Fast smoke test"
+estimated_server_time = 0.0
+measure_download_loaded_latency = true
+measure_upload_loaded_latency = true
+# Transfers here are small and loopback is quick, so both knobs go lower still
+# — the e2e suite asserts that AIM ratings actually render.
+loaded_request_min_duration = 10.0
+loaded_latency_throttle = 10.0
+measurements = [
+  { type = "latency", numPackets = 2 },
+  { type = "download", bytes = 1000000, count = 1, bypassMinDuration = true },
+  { type = "latency", numPackets = 5 },
+  { type = "download", bytes = 20000000, count = 2 },
+  { type = "upload", bytes = 20000000, count = 2 },
+  { type = "latency", numPackets = 2 },
+]
+
+
+# --- packet-loss e2e ---------------------------------------------------------
+# Used only by the tier-2 packet-loss suite, alongside docker-compose.e2e.yml.
+# Minimal transfers plus a short packet-loss burst: this exercises the TURN
+# path, not throughput.
+[profiles.e2e-packetloss]
+description = "Packet-loss e2e"
+estimated_server_time = 0.0
+measure_download_loaded_latency = true
+measure_upload_loaded_latency = true
+loaded_request_min_duration = 10.0
+loaded_latency_throttle = 10.0
+measurements = [
+  { type = "latency", numPackets = 2 },
+  { type = "download", bytes = 1000000, count = 1, bypassMinDuration = true },
+  { type = "latency", numPackets = 5 },
+  { type = "download", bytes = 20000000, count = 2 },
+  { type = "upload", bytes = 20000000, count = 2 },
+  { type = "packetLoss", numPackets = 200, batchSize = 10, batchWaitTime = 10, responsesWaitTime = 2000, connectionTimeout = 10000 },
+  { type = "latency", numPackets = 2 },
+]
