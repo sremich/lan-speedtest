@@ -1,0 +1,27 @@
+[package]
+name = "speedtest-provision"
+# Not the source of truth for the project version — see the repo-root VERSION
+# file. This crate is a deploy-time tool and is not published or versioned.
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.82"
+publish = false
+
+[lib]
+name = "speedtest_provision"
+path = "src/lib.rs"
+
+[[bin]]
+name = "speedtest-provision"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "process", "io-util"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+async-trait = "0.1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

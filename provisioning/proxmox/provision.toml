@@ -1,0 +1,62 @@
+# Provisioning target for the speed test guest.
+#
+# Nothing secret belongs in this file — it is committed. The credential for the
+# hypervisor is your SSH key; the Cloudflare and TURN values come from .env.
+#
+# Usage, in order:
+#
+#   speedtest-provision mac      # print the MAC, change nothing
+#   ... create the DHCP reservation for that MAC ...
+#   speedtest-provision plan     # read-only: what exists, what would change
+#   speedtest-provision apply    # create and configure; safe to re-run
+#   speedtest-provision verify   # health, and that renewal is really scheduled
+
+[proxmox]
+# The node is driven over SSH with pct/pvesh rather than the REST API. That is
+# not only simpler than managing an API token — `pct exec` reaches the guest
+# through the hypervisor, so the first run works before the guest has a DHCP
+# lease, which removes the chicken-and-egg with the reservation.
+ssh_host = "PROXMOX-NODE-ADDRESS"
+ssh_user = "root"
+# ssh_identity = "~/.ssh/id_ed25519"
+
+# The node's name in Proxmox, which is not necessarily its address.
+node = "NODE-NAME"
+
+[guest]
+vmid = 11050
+hostname = "speed"
+
+# Check what is actually on the node first:
+#   pveam available --section system | grep debian
+#   pveam download local <filename>
+ostemplate = "local:vztmpl/debian-13-standard_13.0-1_amd64.tar.zst"
+
+# The predecessor guest ran on 1 core and 512 MB. That is nowhere near enough
+# for a backend whose entire job is to not be the bottleneck.
+cores = 4
+memory_mb = 4096
+swap_mb = 512
+rootfs = "local-lvm:16"
+
+bridge = "vmbr0"
+# vlan_tag = 11
+
+# MAC address. Left unset it is derived from the vmid — stable across rebuilds,
+# locally administered, and therefore safe to hold a DHCP reservation against.
+# A freshly created container otherwise gets a random MAC, so a rebuild would
+# land on a different address and break the reservation.
+#   mac = "02:5E:00:00:2B:2A"
+
+# nesting=1 is required for Docker in an unprivileged container; startup
+# validation rejects the combination without it rather than producing a guest
+# where the container runtime silently does not work.
+unprivileged = true
+features = "nesting=1,keyctl=1"
+onboot = true
+
+extra_tags = ["speedtest"]
+
+# Which [profiles.*] in config/speedtest.toml the deployed service runs.
+# lan-1g or lan-10g; see docs/wiki/Configuration.md for the sizing rules.
+measurement_profile = "lan-1g"

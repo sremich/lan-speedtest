@@ -59,18 +59,23 @@ ENV APP_VERSION=${VERSION} \
     SPEEDTEST_BIND=0.0.0.0:8080
 
 # ca-certificates is not needed: this service makes no outbound requests.
+# curl is for the health check; libcap2-bin provides setcap, used below.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
+    && apt-get install -y --no-install-recommends curl libcap2-bin \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --uid 10001 --no-create-home speedtest
 
 WORKDIR /app
 COPY --from=backend /build/backend/target/release/lan-speedtest /usr/local/bin/lan-speedtest
+# Lets the unprivileged user bind 443 for TLS. `cap_add` alone is not enough:
+# a non-root process needs the capability in its effective set, which is what
+# the file capability provides.
+RUN setcap 'cap_net_bind_service=+ep' /usr/local/bin/lan-speedtest
 COPY --from=frontend /build/frontend/dist /app/static
 COPY config/speedtest.toml /app/config/speedtest.toml
 
 USER speedtest
-EXPOSE 8080
+EXPOSE 8080 443
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD curl -fsS http://127.0.0.1:8080/api/health || exit 1

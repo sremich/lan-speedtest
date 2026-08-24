@@ -54,17 +54,67 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::warn!("{static_dir}: no such directory — API only, no front end");
     }
 
+    let tls = config
+        .server
+        .tls()
+        .map(|(c, k)| (c.to_string(), k.to_string(), config.server.tls_bind.clone()));
+
     let state = AppState {
         payload,
         config: Arc::new(config),
     };
+    let app = routes::router(state);
 
+    // Plain HTTP always listens: it is what the container health check uses,
+    // and what the e2e suite drives. HTTPS is added alongside it when a
+    // certificate is configured, rather than replacing it.
     let listener = tokio::net::TcpListener::bind(&bind).await?;
-    tracing::info!("listening on {bind}");
+    tracing::info!("listening on http://{bind}");
 
-    axum::serve(listener, routes::router(state))
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    let http = {
+        let app = app.clone();
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(shutdown_signal())
+                .await
+        })
+    };
+
+    match tls {
+        None => {
+            tracing::info!("no certificate configured — HTTP only");
+            http.await??;
+        }
+        Some((cert, key, tls_bind)) => {
+            // rustls refuses to guess when more than one crypto provider is
+            // linked in, so name one before any TLS work happens.
+            let _ = rustls::crypto::ring::default_provider().install_default();
+
+            let tls_config = axum_server::tls_rustls::RustlsConfig::from_pem_file(&cert, &key)
+                .await
+                .map_err(|e| {
+                    // A missing or unreadable certificate is worth naming
+                    // precisely: it is usually a bind mount that is not there.
+                    format!("could not load TLS material ({cert}, {key}): {e}")
+                })?;
+
+            let addr: std::net::SocketAddr = tls_bind.parse()?;
+            tracing::info!("listening on https://{tls_bind}");
+
+            let handle = axum_server::Handle::new();
+            let shutdown_handle = handle.clone();
+            tokio::spawn(async move {
+                shutdown_signal().await;
+                shutdown_handle.graceful_shutdown(Some(std::time::Duration::from_secs(5)));
+            });
+
+            axum_server::bind_rustls(addr, tls_config)
+                .handle(handle)
+                .serve(app.into_make_service())
+                .await?;
+            http.abort();
+        }
+    }
 
     Ok(())
 }

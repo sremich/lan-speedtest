@@ -41,6 +41,37 @@ jobs:
           # 0.7 Gbps; see backend/tests/throughput.rs.
           SPEEDTEST_THROUGHPUT_FLOOR_GBPS: "10.0"
 
+  # Tier 1 — the provisioner, against a scripted fake hypervisor.
+  provisioning:
+    name: Provisioning (tier 1)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: provisioning/proxmox
+
+      - name: Formatting
+        run: cargo fmt --manifest-path provisioning/proxmox/Cargo.toml --check
+
+      - name: Clippy
+        run: cargo clippy --manifest-path provisioning/proxmox/Cargo.toml --all-targets -- -D warnings
+
+      - name: Tests
+        # Includes the two properties that matter most: a second run changes
+        # nothing, and a guest we did not create is never touched.
+        run: cargo test --manifest-path provisioning/proxmox/Cargo.toml
+
+      - name: Shell scripts
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          shellcheck provisioning/coturn/install-coturn.sh
+
   # Tier 2 — the real engine in a real browser against the real backend.
   e2e:
     name: e2e (tier 2)

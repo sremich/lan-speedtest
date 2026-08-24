@@ -8,6 +8,57 @@ commit, then tag.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-24
+
+Provisioning and TLS. One command takes a Proxmox node from nothing to a
+serving guest; running it again changes nothing.
+
+### Added
+
+- **Idempotent provisioner** (`speedtest-provision`), driving the node with
+  `pct`/`pvesh` over SSH. `pct exec` reaches the guest through the hypervisor,
+  so the first run works before the guest has a DHCP lease — which removes the
+  chicken-and-egg with the address reservation.
+- **Ownership guard.** Every guest created is tagged, and the tool refuses to
+  modify any guest that does not carry that tag, in every mode including
+  `plan`. Matching is on an exact tag, so a lookalike does not grant ownership.
+- **Pinned MAC address**, derived from the VMID and stable across rebuilds, so
+  a DHCP reservation survives a rebuild. `speedtest-provision mac` prints it
+  and changes nothing, to be run before the reservation is made.
+- Docker installed from upstream (Debian's package has no compose plugin) and
+  proved to work rather than assumed; skipped entirely when already present.
+- coturn installed and configured from the committed template.
+- **TLS terminated by the service itself**, with no reverse proxy — a proxy hop
+  would sit inside the path being measured. Plain HTTP keeps serving the health
+  check. The binary carries `cap_net_bind_service` so it binds 443 as a
+  non-root user.
+- ACME DNS-01 issuance with a weekly renewal and a reload hook that restarts
+  the service, both **verified after the fact** rather than trusted.
+- `plan`, `apply`, `verify` and `mac` subcommands.
+
+### Tests
+
+- 15 provisioning integration tests plus 23 unit tests, all against a scripted
+  fake hypervisor: the ownership guard, a second run creating nothing, Docker
+  skipped when present, and the renewal checks.
+- Hostile values (quotes, `$(...)`, backticks, semicolons) are round-tripped
+  through a real shell to prove a credential cannot break out of a command.
+- 3 TLS tests: HTTPS serves, the measurement contract holds over TLS, and a
+  missing certificate is reported clearly.
+- `shellcheck` over the coturn installer in CI.
+
+### Changed
+
+- `docker-compose.yml` mounts the certificate directory and grants
+  `NET_BIND_SERVICE`.
+- Half-configured TLS (one of cert/key) is now a startup error rather than a
+  silent fallback to plain HTTP.
+
+### Known limitations
+
+- Tier-3 live validation against the real node has not been run yet; the flow
+  is covered only by mocked tests so far.
+
 ## [0.3.0] - 2026-08-24
 
 Milestones 0 through 3 delivered in one pass: scaffold resolved, backend, front
@@ -101,5 +152,6 @@ milestone increments.
 - Tier-4 hardware validation outstanding; releases stay pre-release until it
   passes.
 
-[Unreleased]: https://github.com/sremich/self-hosted-cloudflare-speedtest/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/sremich/self-hosted-cloudflare-speedtest/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v0.4.0
 [0.3.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v0.3.0

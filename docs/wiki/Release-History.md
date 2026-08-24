@@ -4,6 +4,23 @@ Versions are three-part `X.Y.Z`. While the major version is 0, every release is
 a GitHub pre-release — tier-4 validation (10 GbE saturation and a packet
 capture proving no external traffic) gates 1.0.0.
 
+## 0.4.0
+
+Provisioning and TLS.
+
+- Idempotent provisioner driving the node over SSH with `pct`/`pvesh`. Creates
+  the guest, installs Docker and coturn, issues the certificate, deploys the
+  application, and waits for it to be healthy.
+- Guests are tagged on creation, and the tool refuses to modify any guest that
+  does not carry that tag — checked in every mode, before any mutating command.
+- MAC pinned and derived from the VMID, so a DHCP reservation survives a
+  rebuild. `mac` prints it without changing anything, to be run first.
+- The service terminates TLS itself; no reverse proxy, because a proxy hop
+  would sit inside the measured path.
+- Certificate renewal and its reload hook are verified after installation
+  rather than trusted — the predecessor host is in exactly the failure state
+  that catches.
+
 ## 0.3.0
 
 Milestones 0 through 3 in one pass: the scaffold resolved, the backend, the

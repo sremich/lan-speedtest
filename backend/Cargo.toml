@@ -11,6 +11,12 @@ publish = false
 
 [dependencies]
 axum = { version = "0.8", default-features = false, features = ["http1", "http2", "tokio", "query", "json"] }
+# `tls-rustls` would pull rustls/aws-lc-rs, while reqwest (a dev-dependency)
+# brings ring. Two providers compiled in leaves rustls unable to pick a default
+# and it panics at first use. Take the no-provider variant and choose ring
+# explicitly, which also avoids aws-lc-rs's cmake build requirement.
+axum-server = { version = "0.7", default-features = false, features = ["tls-rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "signal", "time"] }
 tower-http = { version = "0.6", features = ["fs", "trace", "set-header"] }
 tower = "0.5"
@@ -24,7 +30,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
-reqwest = { version = "0.12", default-features = false, features = ["stream", "json"] }
+reqwest = { version = "0.12", default-features = false, features = ["stream", "json", "rustls-tls"] }
 futures-util = "0.3"
 
 [profile.release]

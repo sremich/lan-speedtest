@@ -49,6 +49,20 @@ pub struct ServerConfig {
     /// the API still serves, which keeps backend-only tests simple.
     #[serde(default = "default_static_dir")]
     pub static_dir: String,
+    /// Where to listen for HTTPS, when a certificate is configured.
+    ///
+    /// The service terminates TLS itself rather than sitting behind a proxy:
+    /// a proxy hop would land inside the very path being measured, and it is
+    /// one more thing to keep configured and renewed.
+    #[serde(default = "default_tls_bind")]
+    pub tls_bind: String,
+    /// Full certificate chain. TLS is enabled only when both this and the key
+    /// are set; plain HTTP on `bind` continues either way, which is what the
+    /// container health check uses.
+    #[serde(default)]
+    pub tls_cert_file: Option<String>,
+    #[serde(default)]
+    pub tls_key_file: Option<String>,
 }
 
 impl Default for ServerConfig {
@@ -58,6 +72,20 @@ impl Default for ServerConfig {
             max_transfer_bytes: default_max_transfer_bytes(),
             download_chunk_bytes: default_download_chunk_bytes(),
             static_dir: default_static_dir(),
+            tls_bind: default_tls_bind(),
+            tls_cert_file: None,
+            tls_key_file: None,
+        }
+    }
+}
+
+impl ServerConfig {
+    /// TLS is on only when both halves are present. One without the other is a
+    /// misconfiguration rather than a partial success, and `validate` rejects it.
+    pub fn tls(&self) -> Option<(&str, &str)> {
+        match (&self.tls_cert_file, &self.tls_key_file) {
+            (Some(c), Some(k)) if !c.is_empty() && !k.is_empty() => Some((c, k)),
+            _ => None,
         }
     }
 }
@@ -150,6 +178,9 @@ fn default_download_chunk_bytes() -> usize {
 fn default_static_dir() -> String {
     "static".to_string()
 }
+fn default_tls_bind() -> String {
+    "0.0.0.0:443".to_string()
+}
 fn default_true() -> bool {
     true
 }
@@ -174,6 +205,7 @@ pub enum ConfigError {
         cap: u64,
     },
     TurnEnabledWithoutCredentials,
+    HalfConfiguredTls,
 }
 
 impl std::fmt::Display for ConfigError {
@@ -194,6 +226,11 @@ impl std::fmt::Display for ConfigError {
                 f,
                 "turn.enabled is true but uri/user/pass are not all set \
                  (pass is normally supplied via SPEEDTEST_TURN_PASS)"
+            ),
+            Self::HalfConfiguredTls => write!(
+                f,
+                "exactly one of server.tls_cert_file / server.tls_key_file is set. \
+                 Set both to serve HTTPS, or neither to serve plain HTTP"
             ),
         }
     }
@@ -221,6 +258,15 @@ impl Config {
         }
         if let Some(v) = non_empty_env("SPEEDTEST_STATIC_DIR") {
             self.server.static_dir = v;
+        }
+        if let Some(v) = non_empty_env("SPEEDTEST_TLS_BIND") {
+            self.server.tls_bind = v;
+        }
+        if let Some(v) = non_empty_env("SPEEDTEST_TLS_CERT_FILE") {
+            self.server.tls_cert_file = Some(v);
+        }
+        if let Some(v) = non_empty_env("SPEEDTEST_TLS_KEY_FILE") {
+            self.server.tls_key_file = Some(v);
         }
         if let Some(v) = non_empty_env("SPEEDTEST_TURN_URI") {
             self.turn.uri = v;
@@ -260,6 +306,12 @@ impl Config {
             && (self.turn.uri.is_empty() || self.turn.user.is_empty() || self.turn.pass.is_empty())
         {
             return Err(ConfigError::TurnEnabledWithoutCredentials);
+        }
+
+        // Half-configured TLS would otherwise fall back to plain HTTP, which
+        // looks like it worked right up until a browser refuses to connect.
+        if self.server.tls_cert_file.is_some() != self.server.tls_key_file.is_some() {
+            return Err(ConfigError::HalfConfiguredTls);
         }
 
         Ok(())
@@ -428,6 +480,32 @@ measurements = [
                 );
             }
         }
+    }
+
+    #[test]
+    fn tls_is_off_unless_both_halves_are_present() {
+        let mut c: Config = toml::from_str(MINIMAL).unwrap();
+        assert!(c.server.tls().is_none(), "no TLS by default");
+
+        c.server.tls_cert_file = Some("/tls/fullchain.pem".into());
+        c.server.tls_key_file = Some("/tls/privkey.pem".into());
+        assert_eq!(
+            c.server.tls(),
+            Some(("/tls/fullchain.pem", "/tls/privkey.pem"))
+        );
+    }
+
+    #[test]
+    fn half_configured_tls_is_rejected_rather_than_quietly_serving_http() {
+        // Falling back to plain HTTP here would look like success right up
+        // until a browser refuses to connect.
+        let mut c: Config = toml::from_str(MINIMAL).unwrap();
+        c.server.tls_cert_file = Some("/tls/fullchain.pem".into());
+        assert!(matches!(c.validate(), Err(ConfigError::HalfConfiguredTls)));
+
+        c.server.tls_cert_file = None;
+        c.server.tls_key_file = Some("/tls/privkey.pem".into());
+        assert!(matches!(c.validate(), Err(ConfigError::HalfConfiguredTls)));
     }
 
     #[test]
