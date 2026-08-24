@@ -91,6 +91,11 @@ milestone increments.
 - Browser-reported download speed is bounded by the engine's single-stream,
   `r.text()`-decoding design rather than by the link. A parallel-stream harness
   is planned for 0.6.0 and will be reported separately.
+- Quality ratings require a browser whose timing resolution is finer than the
+  path's round trip. Firefox coarsens to ~1 ms, so on a sub-millisecond LAN its
+  latency readings round to zero and the engine returns no scores; the page
+  explains this instead of showing an empty panel. Chrome (~0.1 ms) is
+  unaffected, as are bandwidth, jitter and packet loss.
 - Guest provisioning and TLS automation are not yet implemented (0.4.0).
 - Results are not persisted (0.5.0).
 - Tier-4 hardware validation outstanding; releases stay pre-release until it

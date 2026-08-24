@@ -51,18 +51,50 @@ test('a full run completes and reports every headline metric', async ({ page }) 
   await expect(page.getByTestId('up-loaded')).not.toHaveText(PENDING);
 });
 
-test('AIM ratings are derived and rendered', async ({ page }) => {
+test('AIM ratings are derived, or the run explains why it could not score', async ({
+  page,
+  browserName,
+}) => {
+  // Both outcomes are legitimate and the suitability panel must never be blank.
+  //
+  // Every AIM experience needs `loadedLatencyIncrease`, which the engine only
+  // computes when loaded latency is a *truthy* number. Firefox coarsens
+  // resource timing to ~1 ms (Chrome to ~0.1 ms), so on a sub-millisecond path
+  // every latency reading rounds to exactly 0 and the engine returns no scores
+  // at all. That is the engine's behaviour, not ours — it cannot be fixed
+  // without forking, which is a non-goal — so what we guarantee is that the UI
+  // says so rather than showing an empty panel.
   await page.goto('/');
   await waitForCompletion(page);
 
-  const cards = page.locator('.aim__card');
-  await expect(cards).toHaveCount(3);
+  const cardCount = await page.locator('.aim__card').count();
 
-  const ratings = await page.locator('.aim__rating').allTextContents();
-  expect(ratings).toHaveLength(3);
-  for (const rating of ratings) {
-    expect(['bad', 'poor', 'average', 'good', 'great']).toContain(rating.trim());
+  if (cardCount > 0) {
+    expect(cardCount, 'a scored run must produce exactly three experiences').toBe(3);
+    const ratings = await page.locator('.aim__rating').allTextContents();
+    expect(ratings).toHaveLength(3);
+    for (const rating of ratings) {
+      expect(['bad', 'poor', 'average', 'good', 'great']).toContain(rating.trim());
+    }
+    return;
   }
+
+  // No scores. The panel must explain itself...
+  await expect(
+    page.getByTestId('aim'),
+    `${browserName}: no ratings and no explanation — the panel is simply empty`,
+  ).toContainText('No rating available');
+
+  // ...and the reason must be the one we understand. If loaded latency is
+  // genuinely measurable and scores are still missing, something else is wrong
+  // and this test should fail rather than wave it through.
+  const downLoaded = await page.getByTestId('down-loaded').textContent();
+  const upLoaded = await page.getByTestId('up-loaded').textContent();
+  expect(
+    [downLoaded, upLoaded].every((v) => v !== null && /^(<0\.1|0\.0) ms$/.test(v.trim())),
+    `${browserName}: scores are missing but loaded latency was measurable ` +
+      `(down ${downLoaded}, up ${upLoaded}) — the cause is not timing resolution`,
+  ).toBe(true);
 });
 
 test('the build version and profile are visible on the page', async ({ page }) => {

@@ -81,11 +81,18 @@ work and are covered by tests at two tiers. Guest provisioning and TLS
 automation (0.4.0) and results history (0.5.0) are still to come; 1.0.0 is
 gated on 10 GbE validation and a packet capture on real hardware.
 
-One limitation worth knowing up front: the engine measures with a **single**
-sequential HTTP stream and reads every response body through `r.text()`, so
-browser-reported download speed is bounded by that design rather than by your
-link. The backend is verified separately not to be the bottleneck, and a
-parallel-stream throughput harness is planned for 0.6.0 as a distinct number.
+Two limitations worth knowing up front, both inherited from the engine:
+
+- It measures with a **single** sequential HTTP stream and reads every response
+  body through `r.text()`, so browser-reported download speed is bounded by
+  that design rather than by your link. The backend is verified separately not
+  to be the bottleneck, and a parallel-stream throughput harness is planned for
+  0.6.0 as a distinct number.
+- **Quality ratings need Chrome on a fast LAN.** Firefox coarsens resource
+  timing to ~1 ms, so a sub-millisecond round trip rounds to zero — and the
+  engine treats a zero loaded latency as unavailable and returns no scores. The
+  page says so rather than showing an empty panel. Bandwidth, jitter and packet
+  loss are unaffected.
 
 ## Licence
 

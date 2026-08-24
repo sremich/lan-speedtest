@@ -12,10 +12,25 @@ computes that only when loaded latency is a **truthy** number. If no transfer
 size qualified as loading the connection, loaded latency stays `0`, which is
 falsy, and the engine returns no scores whatsoever.
 
-The cause is almost always `loaded_request_min_duration` sitting above the
-duration of the profile's transfers. The engine's default is 250 ms; a 250 MB
+There are two causes, and the loaded-latency cells tell them apart.
+
+**If loaded latency shows a real number**, the threshold is wrong.
+`loaded_request_min_duration` is sitting above the duration of the profile's
+transfers, so no size qualified. The engine's default is 250 ms; a 250 MB
 download at 10 Gbps takes 200 ms. Lower the threshold or enlarge the
 transfers. See [Configuration](Configuration.md).
+
+**If loaded latency shows `<0.1 ms`**, the reading is genuinely zero and there
+is nothing to fix. This is most likely in **Firefox**, which coarsens resource
+timing to ~1 ms (Chrome coarsens to ~0.1 ms). On a LAN with a sub-millisecond
+round trip, every Firefox latency reading rounds to exactly 0 — and 0 is
+falsy, so the engine treats loaded latency as unavailable and returns no
+scores.
+
+This cannot be fixed from our side: the engine reads latency only from
+`PerformanceResourceTiming`, and forking it is a non-goal. Use Chrome when you
+want the quality ratings on a fast LAN. Bandwidth, jitter and packet loss are
+unaffected.
 
 ## Latency looks quantised, or reads 0
 
