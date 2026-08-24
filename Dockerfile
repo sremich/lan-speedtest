@@ -11,7 +11,10 @@ WORKDIR /build/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 
-COPY frontend/tsconfig.json frontend/vite.config.ts frontend/index.html ./
+# Every page is a Vite entry point; a missing one fails the build rather than
+# silently shipping an image without it.
+COPY frontend/tsconfig.json frontend/vite.config.ts ./
+COPY frontend/*.html ./
 COPY frontend/src ./src
 RUN npx tsc --noEmit && npx vite build
 

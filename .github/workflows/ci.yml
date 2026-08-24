@@ -274,8 +274,9 @@ jobs:
           echo "$STATUS"
           # The version baked into the image must match the VERSION file.
           echo "$STATUS" | grep -q "\"version\":\"$(tr -d '[:space:]' < VERSION)\""
-          # The front end must be present, not just the API.
+          # The front end must be present, not just the API — every page of it.
           curl -fsS http://127.0.0.1:8080/ | grep -qi "LAN Speed Test"
+          curl -fsS http://127.0.0.1:8080/history.html | grep -qi "History"
           # And the engine contract must hold inside the container too.
           curl -fsSD - -o /dev/null "http://127.0.0.1:8080/__down?bytes=1024" \
             | grep -qi "^server-timing: cfRequestDuration;dur="
