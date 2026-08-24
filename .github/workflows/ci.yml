@@ -99,6 +99,12 @@ jobs:
         working-directory: frontend
         run: npm run typecheck
 
+      - name: Front-end unit tests
+        working-directory: frontend
+        # Pure functions — the percentile maths behind the distribution view,
+        # where an off-by-one in interpolation would be invisible in the UI.
+        run: npm run test:unit
+
       - name: Build front end
         working-directory: frontend
         run: npx vite build

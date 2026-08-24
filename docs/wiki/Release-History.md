@@ -4,6 +4,19 @@ Versions are three-part `X.Y.Z`. While the major version is 0, every release is
 a GitHub pre-release — tier-4 validation (10 GbE saturation and a packet
 capture proving no external traffic) gates 1.0.0.
 
+## 0.6.0
+
+The detail view and raw throughput.
+
+- Box plots per transfer size and per latency phase: min, max, mean, median,
+  p25/p75, whiskers to 1.5×IQR and outliers as dots. The headline figures are
+  single percentiles and hide how consistent a run was, which is exactly what
+  exposes a failing cable or a duplex mismatch.
+- Bandwidth is grouped by transfer size, never pooled — a small transfer
+  measures round-trip overhead more than throughput.
+- Parallel-stream raw throughput, on demand, reported as a separate number with
+  an explanation of why it is not comparable to the engine's figure.
+
 ## 0.5.0
 
 Results history.

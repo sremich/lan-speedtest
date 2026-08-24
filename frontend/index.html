@@ -75,6 +75,37 @@
 
       <p class="note" id="precision-note" hidden></p>
 
+      <section class="detail" aria-label="Measurement detail">
+        <details id="detail" data-testid="detail">
+          <summary class="detail__summary">
+            Detail — every sample, per measurement
+          </summary>
+          <div class="detail__body" id="detail-body" data-testid="detail-body"></div>
+        </details>
+      </section>
+
+      <section class="raw" aria-label="Raw throughput">
+        <details id="raw" data-testid="raw">
+          <summary class="detail__summary">Raw throughput (parallel streams)</summary>
+          <div class="detail__body">
+            <p class="note">
+              The measurement above uses one connection at a time and decodes
+              every response, which is how a single transfer behaves. This pulls
+              several streams at once and discards the bytes, which is closer to
+              what the link can carry. They measure different things — read them
+              as two numbers, not one.
+            </p>
+            <div class="raw__controls">
+              <button class="btn" id="raw-run" data-testid="raw-run" type="button">
+                Measure
+              </button>
+              <span class="phase" id="raw-status" data-testid="raw-status"></span>
+            </div>
+            <p class="raw__result" id="raw-result" data-testid="raw-result" hidden></p>
+          </div>
+        </details>
+      </section>
+
       <footer class="page__foot">
         <span id="profile" data-testid="profile"></span>
         <span id="build" data-testid="build"></span>

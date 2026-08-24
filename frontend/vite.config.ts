@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
 
-import { defineConfig } from 'vite';
+import { defineConfig } from 'vitest/config';
 
 // The backend serves the built assets in production, so everything is
 // same-origin and no CORS handling is needed anywhere. In dev, Vite proxies
@@ -19,6 +19,10 @@ export default defineConfig({
       },
       output: { manualChunks: undefined },
     },
+  },
+  test: {
+    include: ['src/**/*.test.ts'],
+    environment: 'node',
   },
   server: {
     proxy: {

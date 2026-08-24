@@ -17,8 +17,14 @@ import {
   formatPacketLoss,
   latencyIsAtBrowserResolution,
 } from './format';
+import { BOXPLOT_LEGEND, renderBoxPlots } from './boxplot';
+import { measureParallelThroughput, suggestedProfile } from './parallel';
+import { bandwidthBySize, formatTransferSize, summarise, type Distribution } from './stats';
 
 type Engine = InstanceType<typeof SpeedTest>;
+
+/** The engine's most recent download figure, used to size the raw harness. */
+let lastDownloadBps: number | undefined;
 
 const el = <T extends HTMLElement>(id: string): T => {
   const node = document.getElementById(id);
@@ -46,6 +52,10 @@ const ui = {
   profile: el('profile'),
   build: el('build'),
   historyLink: el<HTMLAnchorElement>('history-link'),
+  detailBody: el('detail-body'),
+  rawRun: el<HTMLButtonElement>('raw-run'),
+  rawStatus: el('raw-status'),
+  rawResult: el('raw-result'),
 };
 
 /** Human labels for the engine's AIM experience keys. */
@@ -82,6 +92,8 @@ function clearError(): void {
 function render(results: Results, final = false): void {
   const summary = results.getSummary();
 
+  lastDownloadBps = summary.download;
+
   const down = formatBandwidth(summary.download);
   setText(ui.download, down.value);
   ui.downloadUnit.textContent = down.unit;
@@ -99,6 +111,78 @@ function render(results: Results, final = false): void {
 
   renderScores(results, final);
   maybeNotePrecision(summary);
+  renderDetail(results);
+}
+
+/** Formats bits per second for an axis or tooltip. */
+function bps(value: number): string {
+  const f = formatBandwidth(value);
+  return `${f.value} ${f.unit}`;
+}
+
+function ms(value: number): string {
+  return `${value.toFixed(2)} ms`;
+}
+
+/**
+ * The per-measurement distributions.
+ *
+ * The headline figures are single percentiles, which say nothing about how
+ * consistent a run was — and consistency is exactly what exposes a failing
+ * cable or a duplex mismatch. These show every sample the engine collected.
+ */
+function renderDetail(results: Results): void {
+  const groups: Array<{ title: string; rows: Distribution[]; format: (v: number) => string }> = [];
+
+  const download = bandwidthBySize(results.getDownloadBandwidthPoints(), formatTransferSize);
+  if (download.length > 0) {
+    groups.push({ title: 'Download, by transfer size', rows: download, format: bps });
+  }
+
+  const upload = bandwidthBySize(results.getUploadBandwidthPoints(), formatTransferSize);
+  if (upload.length > 0) {
+    groups.push({ title: 'Upload, by transfer size', rows: upload, format: bps });
+  }
+
+  const latencyRows: Distribution[] = [];
+  const latencySeries: Array<[string, number[]]> = [
+    ['Idle', results.getUnloadedLatencyPoints()],
+    ['Loaded ↓', results.getDownLoadedLatencyPoints()],
+    ['Loaded ↑', results.getUpLoadedLatencyPoints()],
+  ];
+  for (const [label, points] of latencySeries) {
+    const summary = summarise(points);
+    if (summary) {
+      latencyRows.push({
+        label,
+        detail: `${summary.count} ping${summary.count === 1 ? '' : 's'}`,
+        summary,
+      });
+    }
+  }
+  if (latencyRows.length > 0) {
+    // Not zero-based: on a LAN every value sits near zero, and forcing the
+    // axis to the origin would flatten the whole distribution into a smear.
+    groups.push({ title: 'Latency', rows: latencyRows, format: ms });
+  }
+
+  if (groups.length === 0) {
+    ui.detailBody.innerHTML = '<p class="note">No samples collected yet.</p>';
+    return;
+  }
+
+  ui.detailBody.innerHTML =
+    groups
+      .map(
+        (g) => `<div class="box__group">
+          <h3 class="box__group-title">${g.title}</h3>
+          ${renderBoxPlots(g.rows, {
+            format: g.format,
+            zeroBased: g.format === bps,
+          })}
+        </div>`,
+      )
+      .join('') + BOXPLOT_LEGEND;
 }
 
 function renderScores(results: Results, final: boolean): void {
@@ -237,6 +321,46 @@ async function run(): Promise<void> {
   document.body.dataset.testState = 'running';
   engine.play();
 }
+
+/**
+ * The parallel-stream harness, run on demand.
+ *
+ * Deliberately a separate control and a separate number: it measures something
+ * the engine does not, and merging the two would be misleading.
+ */
+ui.rawRun.addEventListener('click', () => {
+  void (async () => {
+    ui.rawRun.disabled = true;
+    ui.rawResult.hidden = true;
+    ui.rawStatus.textContent = 'Measuring…';
+
+    try {
+      // Size the transfer from what the engine just measured, so the harness
+      // takes about a second on any link.
+      const observed = lastDownloadBps ?? 1e9;
+      const { streams, bytesPerStream } = suggestedProfile(observed);
+
+      const result = await measureParallelThroughput({
+        streams,
+        bytesPerStream,
+        timeoutMs: 60_000,
+      });
+
+      const f = formatBandwidth(result.bps);
+      ui.rawResult.innerHTML = `${f.value} <span>${f.unit} · ${result.streams} streams × ${
+        formatTransferSize(result.bytesPerStream)
+      } in ${(result.elapsedMs / 1000).toFixed(2)} s</span>`;
+      ui.rawResult.hidden = false;
+      ui.rawStatus.textContent = '';
+      document.body.dataset.rawState = 'done';
+    } catch (e) {
+      ui.rawStatus.textContent = e instanceof Error ? e.message : String(e);
+      document.body.dataset.rawState = 'error';
+    } finally {
+      ui.rawRun.disabled = false;
+    }
+  })();
+});
 
 ui.restart.addEventListener('click', () => {
   void run().catch((e: unknown) => {

@@ -8,6 +8,56 @@ commit, then tag.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-25
+
+The detail view, and raw throughput as a separate number.
+
+### Added
+
+- **Per-measurement distributions.** A collapsible detail section shows a box
+  plot for every download and upload transfer size and for each latency phase:
+  minimum, maximum, mean, median, 25th and 75th percentiles, whiskers to the
+  furthest sample within 1.5×IQR, and a dot per outlier. Hovering a row gives
+  the full five-number summary.
+
+  The headline figures are single percentiles, which say nothing about how
+  consistent a run was — and a link that averages 940 Mbps by alternating
+  between 500 and 1300 is a very different network from one that holds 940
+  throughout. That second case is what a failing cable or a duplex mismatch
+  looks like, and it was previously invisible.
+
+  Bandwidth is grouped by transfer size rather than pooled: a small transfer
+  measures round-trip overhead more than throughput, so mixing sizes would make
+  a healthy link look wildly inconsistent.
+
+- **Parallel-stream raw throughput**, on demand and reported as a distinct
+  number. The engine issues one request at a time and decodes every response
+  through `r.text()`, so its download figure is bounded by single-stream TCP
+  plus main-thread decoding rather than by the link. This pulls several streams
+  concurrently and discards bytes through the streaming reader, so nothing
+  materialises the payload. The UI explains that the two measure different
+  things, because otherwise someone will compare them.
+
+- Percentiles use the type-7 (linear interpolation) definition, matching NumPy
+  and Excel, so a figure shown here is what someone gets checking by hand.
+
+### Tests
+
+- Vitest for the front end: 24 unit tests over the percentile and summary
+  maths, including Tukey fences, zero-IQR sets, single samples, and the
+  guarantee that whiskers stay inside min/max and never invent a value at the
+  fence.
+- Playwright: the detail view renders a distribution per measurement with a
+  legend and per-row tooltips; box geometry is checked numerically (median
+  inside its box, whiskers spanning it); the raw harness produces a labelled
+  figure and stays on-origin.
+
+### Fixed
+
+- A zero-spread distribution drew its minimum-width box anchored at p25, which
+  put it beside the whisker rather than on it and read as a real offset. Now
+  centred on the median.
+
 ## [0.5.0] - 2026-08-24
 
 Results history. Runs no longer vanish when the tab closes.
@@ -202,7 +252,8 @@ milestone increments.
 - Tier-4 hardware validation outstanding; releases stay pre-release until it
   passes.
 
-[Unreleased]: https://github.com/sremich/self-hosted-cloudflare-speedtest/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/sremich/self-hosted-cloudflare-speedtest/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v0.6.0
 [0.5.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v0.5.0
 [0.4.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v0.4.0
 [0.3.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v0.3.0

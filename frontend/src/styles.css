@@ -373,3 +373,113 @@ body {
   border: 1px solid var(--rating, var(--border));
   color: var(--rating, var(--text-dim));
 }
+
+
+/* --- detail view (box plots) ---------------------------------------------- */
+
+.detail,
+.raw {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.detail__summary {
+  padding: 14px 18px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-dim);
+  user-select: none;
+}
+
+.detail__summary:hover { color: var(--text); }
+
+.detail__body {
+  padding: 0 18px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.box__group-title {
+  margin: 0 0 4px;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-dim);
+}
+
+.box__svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  overflow: visible;
+}
+
+.box__grid { stroke: var(--border); stroke-width: 1; }
+.box__tick,
+.box__label {
+  fill: var(--text-dim);
+  font-size: 11px;
+  font-family: var(--font-num);
+}
+
+.box__whisker { stroke: var(--text-dim); stroke-width: 1; }
+.box__cap { stroke: var(--text-dim); stroke-width: 1; }
+.box__box {
+  fill: var(--accent-soft);
+  stroke: var(--accent);
+  stroke-width: 1;
+}
+.box__median { stroke: var(--text); stroke-width: 2; }
+.box__mean { fill: #58a6ff; }
+.box__outlier { fill: var(--bad); }
+.box__row:hover .box__box { fill: rgba(246, 130, 31, 0.3); }
+
+.box__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+
+.box__key::before {
+  content: "";
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: 5px;
+  vertical-align: baseline;
+  border-radius: 2px;
+}
+
+.box__key--box::before { background: var(--accent-soft); border: 1px solid var(--accent); }
+.box__key--median::before { background: var(--text); width: 2px; height: 11px; border-radius: 0; }
+.box__key--mean::before { background: #58a6ff; border-radius: 50%; }
+.box__key--whisker::before { background: var(--text-dim); height: 2px; }
+.box__key--outlier::before { background: var(--bad); border-radius: 50%; }
+
+/* --- raw throughput ------------------------------------------------------- */
+
+.raw__controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.raw__result {
+  margin: 0;
+  font-family: var(--font-num);
+  font-size: 1.6rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.raw__result span {
+  font-size: 0.8rem;
+  font-weight: 400;
+  color: var(--text-dim);
+}

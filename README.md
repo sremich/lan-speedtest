@@ -24,6 +24,8 @@ jitter and packet loss answer and a plain throughput test does not.
 | Jitter | Variation in round trip |
 | Packet loss | UDP burst relayed back to the browser through your own TURN server |
 | Suitability | Streaming, gaming and video-call ratings, from the engine's own scoring |
+| Distribution | Every sample, per transfer size and latency phase: min, max, mean, median, 25th/75th percentile and outliers |
+| Raw throughput | Parallel-stream figure, on demand, reported separately from the engine's single-stream result |
 
 ## Nothing leaves your network
 
@@ -84,10 +86,11 @@ gated on 10 GbE validation and a packet capture on real hardware.
 Two limitations worth knowing up front, both inherited from the engine:
 
 - It measures with a **single** sequential HTTP stream and reads every response
-  body through `r.text()`, so browser-reported download speed is bounded by
-  that design rather than by your link. The backend is verified separately not
-  to be the bottleneck, and a parallel-stream throughput harness is planned for
-  0.6.0 as a distinct number.
+  body through `r.text()`, so its download figure is bounded by that design
+  rather than by your link. The backend is verified separately not to be the
+  bottleneck, and the page offers a parallel-stream harness as a distinct
+  number — on a 1 GbE link the two typically differ by close to 2×, which is
+  the design showing, not a fault.
 - **Quality ratings need Chrome on a fast LAN.** Firefox coarsens resource
   timing to ~1 ms, so a sub-millisecond round trip rounds to zero — and the
   engine treats a zero loaded latency as unavailable and returns no scores. The

@@ -180,3 +180,127 @@ test('the measurement endpoints are same-origin and uncacheable', async ({ page,
   expect(res.headers()['server-timing']).toMatch(/^cfRequestDuration;dur=[0-9.]+$/);
   expect(res.headers()['cache-control']).toContain('no-store');
 });
+
+test('the detail view shows a distribution per measurement', async ({ page }) => {
+  // The headline figures are single percentiles, which say nothing about
+  // consistency. This is the view that does.
+  await page.goto('/');
+  await waitForCompletion(page);
+
+  const detail = page.getByTestId('detail');
+  await detail.locator('summary').click();
+
+  const body = page.getByTestId('detail-body');
+  await expect(body).toBeVisible();
+
+  // At least download and latency should have produced samples.
+  const groups = body.locator('.box__group');
+  expect(await groups.count()).toBeGreaterThanOrEqual(2);
+
+  const titles = await body.locator('.box__group-title').allTextContents();
+  expect(titles.some((t) => /download/i.test(t))).toBe(true);
+  expect(titles.some((t) => /latency/i.test(t))).toBe(true);
+
+  // Each group draws a box, a median line and whiskers per row.
+  expect(await body.locator('rect.box__box').count()).toBeGreaterThanOrEqual(2);
+  expect(await body.locator('line.box__median').count()).toBeGreaterThanOrEqual(2);
+  expect(await body.locator('line.box__whisker').count()).toBeGreaterThanOrEqual(2);
+  expect(await body.locator('circle.box__mean').count()).toBeGreaterThanOrEqual(2);
+
+  // And the legend explains the marks, so the plot is readable without docs.
+  await expect(body.locator('.box__legend')).toBeVisible();
+
+  // Every row carries a tooltip with the five-number summary.
+  const firstTitle = await body.locator('g.box__row title').first().textContent();
+  for (const key of ['min', 'p25', 'median', 'mean', 'p75', 'max']) {
+    expect(firstTitle, `tooltip should include ${key}`).toContain(key);
+  }
+});
+
+test('box geometry is ordered and inside the plot', async ({ page }) => {
+  // A box drawn with p75 left of p25, or a median outside its own box, would
+  // look plausible and be wrong. Check the geometry rather than trusting it.
+  await page.goto('/');
+  await waitForCompletion(page);
+  await page.getByTestId('detail').locator('summary').click();
+
+  const rows = page.locator('g.box__row');
+  const count = await rows.count();
+  expect(count).toBeGreaterThan(0);
+
+  for (let i = 0; i < count; i += 1) {
+    const row = rows.nth(i);
+    const box = row.locator('rect.box__box');
+    const median = row.locator('line.box__median');
+
+    const bx = Number(await box.getAttribute('x'));
+    const bw = Number(await box.getAttribute('width'));
+    const mx = Number(await median.getAttribute('x1'));
+
+    expect(bw, `row ${i}: box has no width`).toBeGreaterThan(0);
+    expect(mx, `row ${i}: median ${mx} is left of the box at ${bx}`).toBeGreaterThanOrEqual(bx - 0.6);
+    expect(mx, `row ${i}: median ${mx} is right of the box end ${bx + bw}`).toBeLessThanOrEqual(
+      bx + bw + 0.6,
+    );
+
+    // Whiskers must span the box. The tolerance is the minimum drawn box
+    // width: a perfectly consistent set has p25 === p75 === min === max, so
+    // the box is widened to stay visible and legitimately overhangs a
+    // zero-length whisker by half of that.
+    const MIN_BOX_W = 2;
+    const whisker = row.locator('line.box__whisker');
+    const w1 = Number(await whisker.getAttribute('x1'));
+    const w2 = Number(await whisker.getAttribute('x2'));
+    expect(w1, `row ${i}: whisker starts right of the box`).toBeLessThanOrEqual(
+      bx + MIN_BOX_W,
+    );
+    expect(w2, `row ${i}: whisker ends left of the box`).toBeGreaterThanOrEqual(
+      bx + bw - MIN_BOX_W,
+    );
+  }
+});
+
+test('raw throughput is measured separately and labelled as a different number', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await waitForCompletion(page);
+
+  const raw = page.getByTestId('raw');
+  await raw.locator('summary').click();
+  // The explanation must be present: two numbers that are not comparable need
+  // saying so, or someone will compare them.
+  await expect(raw).toContainText(/different things/i);
+
+  await page.getByTestId('raw-run').click();
+
+  await expect
+    .poll(async () => page.locator('body').getAttribute('data-raw-state'), { timeout: 90_000 })
+    .toBe('done');
+
+  const result = page.getByTestId('raw-result');
+  await expect(result).toBeVisible();
+  await expect(result).toContainText(/bps/);
+  // It reports how it got there, not just a bare figure.
+  await expect(result).toContainText(/streams/);
+});
+
+test('the raw harness stays on this origin', async ({ page, baseURL }) => {
+  const origin = new URL(baseURL!).origin;
+  const foreign: string[] = [];
+  page.on('request', (req) => {
+    const url = req.url();
+    if (url.startsWith('data:') || url.startsWith('blob:')) return;
+    if (!url.startsWith(origin)) foreign.push(`${req.method()} ${url}`);
+  });
+
+  await page.goto('/');
+  await waitForCompletion(page);
+  await page.getByTestId('raw').locator('summary').click();
+  await page.getByTestId('raw-run').click();
+  await expect
+    .poll(async () => page.locator('body').getAttribute('data-raw-state'), { timeout: 90_000 })
+    .toBe('done');
+
+  expect(foreign, `requests left the origin:\n${foreign.join('\n')}`).toEqual([]);
+});
