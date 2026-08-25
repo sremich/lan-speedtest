@@ -17,6 +17,7 @@ import {
   formatPacketLoss,
   latencyIsAtBrowserResolution,
 } from './format';
+import { renderAreaChart } from './areachart';
 import { BOXPLOT_LEGEND, renderBoxPlots } from './boxplot';
 import { measureParallelThroughput, suggestedProfile } from './parallel';
 import { bandwidthBySize, formatTransferSize, summarise, type Distribution } from './stats';
@@ -25,6 +26,9 @@ type Engine = InstanceType<typeof SpeedTest>;
 
 /** The engine's most recent download figure, used to size the raw harness. */
 let lastDownloadBps: number | undefined;
+
+/** The running engine, so the pause control can reach it. */
+let currentEngine: Engine | undefined;
 
 const el = <T extends HTMLElement>(id: string): T => {
   const node = document.getElementById(id);
@@ -43,15 +47,21 @@ const ui = {
   uploadUnit: el('upload-unit'),
   latency: el('latency'),
   jitter: el('jitter'),
-  downLoaded: el('down-loaded'),
-  upLoaded: el('up-loaded'),
   packetLoss: el('packet-loss'),
-  duration: el('duration'),
   aim: el('aim'),
   precisionNote: el('precision-note'),
   profile: el('profile'),
   build: el('build'),
   historyLink: el<HTMLAnchorElement>('history-link'),
+  downLoaded: el('down-loaded'),
+  upLoaded: el('up-loaded'),
+  downJitter: el('down-jitter'),
+  upJitter: el('up-jitter'),
+  downloadChart: el('download-chart'),
+  uploadChart: el('upload-chart'),
+  measuredAt: el('measured-at'),
+  connection: el('connection'),
+  pause: el<HTMLButtonElement>('pause'),
   detailBody: el('detail-body'),
   rawRun: el<HTMLButtonElement>('raw-run'),
   rawStatus: el('raw-status'),
@@ -106,12 +116,51 @@ function render(results: Results, final = false): void {
   setText(ui.jitter, formatLatency(summary.jitter));
   setText(ui.downLoaded, formatLatency(summary.downLoadedLatency));
   setText(ui.upLoaded, formatLatency(summary.upLoadedLatency));
+  setText(ui.downJitter, formatLatency(summary.downLoadedJitter));
+  setText(ui.upJitter, formatLatency(summary.upLoadedJitter));
   setText(ui.packetLoss, formatPacketLoss(summary.packetLoss));
-  setText(ui.duration, formatDuration(summary.totalDurationMs));
+
+  renderTraces(results, summary);
+
+  if (summary.totalDurationMs !== undefined) {
+    ui.measuredAt.textContent = `Measured at ${new Date().toLocaleTimeString()} · took ${formatDuration(
+      summary.totalDurationMs,
+    )}`;
+  }
 
   renderScores(results, final);
   maybeNotePrecision(summary);
   renderDetail(results);
+}
+
+/**
+ * The live bandwidth traces.
+ *
+ * The engine reports bandwidth at the 90th percentile, so that is what the
+ * marker line shows — it makes the headline number locatable within the shape
+ * of the samples rather than an unexplained summary of them.
+ */
+function renderTraces(results: Results, summary: MeasurementSummary): void {
+  const down = results.getDownloadBandwidthPoints().map((p) => p.bps);
+  const up = results.getUploadBandwidthPoints().map((p) => p.bps);
+
+  ui.downloadChart.innerHTML = renderAreaChart(down, {
+    colour: 'var(--accent)',
+    id: 'grad-down',
+    format: bps,
+    ...(summary.download !== undefined
+      ? { marker: { value: summary.download, label: '90th percentile' } }
+      : {}),
+  });
+
+  ui.uploadChart.innerHTML = renderAreaChart(up, {
+    colour: 'var(--upload)',
+    id: 'grad-up',
+    format: bps,
+    ...(summary.upload !== undefined
+      ? { marker: { value: summary.upload, label: '90th percentile' } }
+      : {}),
+  });
 }
 
 /** Formats bits per second for an axis or tooltip. */
@@ -133,6 +182,7 @@ function ms(value: number): string {
  */
 function renderDetail(results: Results): void {
   const groups: Array<{ title: string; rows: Distribution[]; format: (v: number) => string }> = [];
+  let packetLossBar = '';
 
   const download = bandwidthBySize(results.getDownloadBandwidthPoints(), formatTransferSize);
   if (download.length > 0) {
@@ -154,19 +204,35 @@ function renderDetail(results: Results): void {
     const summary = summarise(points);
     if (summary) {
       latencyRows.push({
-        label,
+        label: `${label} (${summary.count})`,
         detail: `${summary.count} ping${summary.count === 1 ? '' : 's'}`,
         summary,
       });
     }
   }
+  // Packet loss as a received/lost bar, which reads at a glance in a way a
+  // percentage does not — and shows the sample size, since 0% of 20 packets
+  // and 0% of 1000 are different claims.
+  const loss = results.getPacketLoss();
+  if (loss !== undefined && Number.isFinite(loss)) {
+    const received = Math.max(0, Math.min(1, 1 - loss));
+    packetLossBar = `<div class="box__group">
+      <h3 class="box__group-title">Packet loss</h3>
+      <div class="loss-bar">
+        <div class="loss-bar__received" style="width: ${(received * 100).toFixed(2)}%">
+          ${received >= 0.08 ? `Received ${(received * 100).toFixed(received === 1 ? 0 : 1)}%` : ''}
+        </div>
+      </div>
+    </div>`;
+  }
+
   if (latencyRows.length > 0) {
     // Not zero-based: on a LAN every value sits near zero, and forcing the
     // axis to the origin would flatten the whole distribution into a smear.
     groups.push({ title: 'Latency', rows: latencyRows, format: ms });
   }
 
-  if (groups.length === 0) {
+  if (groups.length === 0 && packetLossBar === '') {
     ui.detailBody.innerHTML = '<p class="note">No samples collected yet.</p>';
     return;
   }
@@ -182,7 +248,9 @@ function renderDetail(results: Results): void {
           })}
         </div>`,
       )
-      .join('') + BOXPLOT_LEGEND;
+      .join('') +
+    packetLossBar +
+    BOXPLOT_LEGEND;
 }
 
 function renderScores(results: Results, final: boolean): void {
@@ -259,6 +327,10 @@ async function run(): Promise<void> {
   }`;
   ui.build.textContent = `v${status.version} · ${status.gitSha}`;
   ui.historyLink.hidden = !status.historyEnabled;
+  // Stands in for the server-location map on speed.cloudflare.com. That needs
+  // external tiles, which would leave the LAN — the one thing this must not
+  // do — and on a LAN the useful half is knowing which machine you are on.
+  ui.connection.textContent = `client: ${status.clientIp}`;
 
   const config: EngineConfig = profile.engineConfig;
   // Fails loudly rather than letting a bad deploy phone home. See api.ts.
@@ -296,6 +368,7 @@ async function run(): Promise<void> {
     ui.progress.style.width = '100%';
     setText(ui.phase, 'Complete');
     ui.restart.disabled = false;
+    ui.pause.disabled = true;
     document.body.dataset.testState = 'complete';
 
     // Best-effort: a storage failure must not present as a failed test.
@@ -317,6 +390,10 @@ async function run(): Promise<void> {
       });
     }
   };
+
+  currentEngine = engine;
+  ui.pause.textContent = 'Pause';
+  ui.pause.disabled = false;
 
   document.body.dataset.testState = 'running';
   engine.play();
@@ -360,6 +437,25 @@ ui.rawRun.addEventListener('click', () => {
       ui.rawRun.disabled = false;
     }
   })();
+});
+
+/**
+ * Pause and resume.
+ *
+ * The engine supports this for the bandwidth and latency stages; packet loss
+ * and reachability run to completion once started, so the button reflects what
+ * the engine will actually honour rather than promising more.
+ */
+ui.pause.addEventListener('click', () => {
+  const engine = currentEngine;
+  if (!engine) return;
+  if (engine.isRunning) {
+    engine.pause();
+    ui.pause.textContent = 'Resume';
+  } else {
+    engine.play();
+    ui.pause.textContent = 'Pause';
+  }
 });
 
 ui.restart.addEventListener('click', () => {

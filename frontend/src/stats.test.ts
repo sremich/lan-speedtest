@@ -163,9 +163,12 @@ describe('bandwidthBySize', () => {
     // a small transfer measures round-trip overhead more than throughput.
     const rows = bandwidthBySize(points, formatTransferSize);
     expect(rows).toHaveLength(2);
-    expect(rows[0]!.label).toBe('100 MB');
+    // The count is part of the label: a distribution drawn from two samples
+    // deserves less trust than one drawn from ten, and the reader should be
+    // able to see which they are looking at.
+    expect(rows[0]!.label).toBe('100 MB (3)');
     expect(rows[0]!.summary.count).toBe(3);
-    expect(rows[1]!.label).toBe('1 MB');
+    expect(rows[1]!.label).toBe('1 MB (2)');
     expect(rows[1]!.summary.count).toBe(2);
   });
 
@@ -192,7 +195,7 @@ describe('bandwidthBySize', () => {
       formatTransferSize,
     );
     expect(rows).toHaveLength(1);
-    expect(rows[0]!.label).toBe('100 MB');
+    expect(rows[0]!.label).toBe('100 MB (1)');
   });
 
   it('returns nothing for no points', () => {

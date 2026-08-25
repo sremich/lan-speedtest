@@ -3,7 +3,7 @@
 
 services:
   app:
-    image: ghcr.io/sremich/self-hosted-cloudflare-speedtest:v0.6.1
+    image: ghcr.io/sremich/self-hosted-cloudflare-speedtest:v1.0.0
     container_name: speedtest
     restart: unless-stopped
     env_file: .env

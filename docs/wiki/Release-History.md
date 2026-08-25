@@ -4,6 +4,25 @@ Versions are three-part `X.Y.Z`. While the major version is 0, every release is
 a GitHub pre-release — tier-4 validation (10 GbE saturation and a packet
 capture proving no external traffic) gates 1.0.0.
 
+## 1.0.0
+
+Running in production, with the interface reworked against the current
+speed.cloudflare.com.
+
+- Live bandwidth traces per direction with the reported percentile marked.
+- Loaded latency and jitter shown per direction; packet loss as a received bar.
+- Sample counts on every distribution, pause/resume, measured-at, client
+  address.
+- No server-location map: its tiles come from an external host, which this
+  project must not contact. The client address replaces the useful half.
+
+## 0.6.1
+
+Nine defects found by the first live provisioning run against a real node — a
+credential reaching an error message, an ACME hook aborting before the renewal
+cron was installed, certificate permissions that would have failed at the next
+renewal, and a coturn configuration that was never read. See the changelog.
+
 ## 0.6.0
 
 The detail view and raw throughput.

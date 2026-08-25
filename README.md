@@ -24,6 +24,7 @@ jitter and packet loss answer and a plain throughput test does not.
 | Jitter | Variation in round trip |
 | Packet loss | UDP burst relayed back to the browser through your own TURN server |
 | Suitability | Streaming, gaming and video-call ratings, from the engine's own scoring |
+| Live traces | Download and upload drawn as they are measured, with the reported percentile marked |
 | Distribution | Every sample, per transfer size and latency phase: min, max, mean, median, 25th/75th percentile and outliers |
 | Raw throughput | Parallel-stream figure, on demand, reported separately from the engine's single-stream result |
 

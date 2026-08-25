@@ -29,6 +29,23 @@ function latencyIsUnmeasurable(text: string | null): boolean {
   return Number.isNaN(value) || value <= 0.05;
 }
 
+/**
+ * Ensures a <details> section is open.
+ *
+ * Clicking the summary toggles, so a section that already starts open would be
+ * closed by a click — which is how this test broke when the detail view was
+ * made open by default.
+ */
+async function ensureOpen(page: Page, testId: string): Promise<void> {
+  const section = page.getByTestId(testId);
+  if (!(await section.evaluate((el) => (el as HTMLDetailsElement).open))) {
+    await section.locator('summary').click();
+  }
+  await expect
+    .poll(async () => section.evaluate((el) => (el as HTMLDetailsElement).open))
+    .toBe(true);
+}
+
 /** Waits for the run to reach a terminal state, surfacing the UI error if any. */
 async function waitForCompletion(page: Page): Promise<void> {
   await expect
@@ -187,8 +204,7 @@ test('the detail view shows a distribution per measurement', async ({ page }) =>
   await page.goto('/');
   await waitForCompletion(page);
 
-  const detail = page.getByTestId('detail');
-  await detail.locator('summary').click();
+  await ensureOpen(page, 'detail');
 
   const body = page.getByTestId('detail-body');
   await expect(body).toBeVisible();
@@ -222,7 +238,7 @@ test('box geometry is ordered and inside the plot', async ({ page }) => {
   // look plausible and be wrong. Check the geometry rather than trusting it.
   await page.goto('/');
   await waitForCompletion(page);
-  await page.getByTestId('detail').locator('summary').click();
+  await ensureOpen(page, 'detail');
 
   const rows = page.locator('g.box__row');
   const count = await rows.count();
@@ -266,8 +282,8 @@ test('raw throughput is measured separately and labelled as a different number',
   await page.goto('/');
   await waitForCompletion(page);
 
+  await ensureOpen(page, 'raw');
   const raw = page.getByTestId('raw');
-  await raw.locator('summary').click();
   // The explanation must be present: two numbers that are not comparable need
   // saying so, or someone will compare them.
   await expect(raw).toContainText(/different things/i);
@@ -296,11 +312,67 @@ test('the raw harness stays on this origin', async ({ page, baseURL }) => {
 
   await page.goto('/');
   await waitForCompletion(page);
-  await page.getByTestId('raw').locator('summary').click();
+  await ensureOpen(page, 'raw');
   await page.getByTestId('raw-run').click();
   await expect
     .poll(async () => page.locator('body').getAttribute('data-raw-state'), { timeout: 90_000 })
     .toBe('done');
 
   expect(foreign, `requests left the origin:\n${foreign.join('\n')}`).toEqual([]);
+});
+
+test('the live traces are drawn for both directions', async ({ page }) => {
+  // The trace is what makes the headline number legible as the shape of a
+  // measurement rather than an unexplained summary of it.
+  await page.goto('/');
+  await waitForCompletion(page);
+
+  for (const id of ['download-chart', 'upload-chart']) {
+    const chart = page.getByTestId(id);
+    await expect(chart.locator('svg'), `${id} should render`).toBeVisible();
+    // A filled area and a stroked line, not just an axis.
+    expect(await chart.locator('path').count()).toBeGreaterThanOrEqual(2);
+  }
+
+  // The reported percentile is marked, so the headline can be located on it.
+  expect(await page.locator('.trace__marker').count()).toBeGreaterThanOrEqual(1);
+});
+
+test('loaded latency and jitter are shown per direction', async ({ page }) => {
+  await page.goto('/');
+  await waitForCompletion(page);
+
+  for (const id of ['down-loaded', 'up-loaded', 'down-jitter', 'up-jitter']) {
+    const value = await page.getByTestId(id).textContent();
+    expect(value, `${id} should render something`).not.toBeNull();
+    expect(
+      value!.trim() === PENDING || /^(<0\.1|\d+\.\d+) ms$/.test(value!.trim()),
+      `unexpected ${id} rendering: ${value}`,
+    ).toBe(true);
+  }
+});
+
+test('the run reports when it was measured and from where', async ({ page }) => {
+  await page.goto('/');
+  await waitForCompletion(page);
+
+  await expect(page.getByTestId('measured-at')).toContainText(/Measured at/);
+  // Stands in for the server-location panel: which machine this ran from.
+  await expect(page.getByTestId('connection')).toContainText(/client: \S+/);
+});
+
+test('a running test can be paused and resumed', async ({ page }) => {
+  await page.goto('/');
+  // Wait until it is genuinely under way before pausing.
+  await expect(page.getByTestId('phase')).not.toHaveText('Starting…', { timeout: 30_000 });
+
+  const pause = page.getByTestId('pause');
+  await pause.click();
+  await expect(pause).toHaveText('Resume');
+
+  await pause.click();
+  await expect(pause).toHaveText('Pause');
+
+  // And it still finishes afterwards.
+  await waitForCompletion(page);
 });

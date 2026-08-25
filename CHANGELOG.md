@@ -252,7 +252,8 @@ milestone increments.
 - Tier-4 hardware validation outstanding; releases stay pre-release until it
   passes.
 
-[Unreleased]: https://github.com/sremich/self-hosted-cloudflare-speedtest/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/sremich/self-hosted-cloudflare-speedtest/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v1.0.0
 [0.6.1]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v0.6.1
 [0.6.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v0.6.0
 [0.5.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v0.5.0

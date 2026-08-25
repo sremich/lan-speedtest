@@ -14,6 +14,9 @@ export interface Status {
   gitSha: string;
   profile: string;
   historyEnabled: boolean;
+  /** The requesting client, as seen from the connection. */
+  clientIp: string;
+  serverProfileDescription: string;
 }
 
 export interface EngineConfig {

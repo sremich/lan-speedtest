@@ -140,7 +140,7 @@ export function bandwidthBySize(
       const summary = summarise(samples);
       return summary
         ? {
-            label: formatBytes(bytes),
+            label: `${formatBytes(bytes)} (${summary.count})`,
             detail: `${summary.count} request${summary.count === 1 ? '' : 's'}`,
             summary,
           }

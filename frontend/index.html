@@ -16,8 +16,9 @@
           <a class="btn" id="history-link" data-testid="history-link" href="/history.html" hidden>
             History
           </a>
+          <button class="btn" id="pause" data-testid="pause" type="button">Pause</button>
           <button class="btn" id="restart" data-testid="restart" type="button" disabled>
-            Test again
+            Retest
           </button>
         </div>
       </header>
@@ -28,58 +29,70 @@
 
       <p class="error" id="error" data-testid="error" hidden></p>
 
-      <section class="bandwidth" aria-label="Bandwidth">
-        <article class="metric metric--hero">
-          <h2 class="metric__label">Download</h2>
-          <p class="metric__value" id="download" data-testid="download">—</p>
-          <p class="metric__unit" id="download-unit"></p>
+      <!-- Headline: the two bandwidth traces, then the latency column. -->
+      <section class="headline" aria-label="Results">
+        <article class="trace">
+          <h2 class="trace__label">Download</h2>
+          <p class="trace__value">
+            <span id="download" data-testid="download">—</span
+            ><span class="trace__unit" id="download-unit"></span>
+          </p>
+          <div class="trace__chart" id="download-chart" data-testid="download-chart"></div>
         </article>
-        <article class="metric metric--hero">
-          <h2 class="metric__label">Upload</h2>
-          <p class="metric__value" id="upload" data-testid="upload">—</p>
-          <p class="metric__unit" id="upload-unit"></p>
-        </article>
-      </section>
 
-      <section class="grid" aria-label="Latency and loss">
-        <article class="metric">
-          <h2 class="metric__label">Latency <span class="metric__qualifier">idle</span></h2>
-          <p class="metric__value metric__value--sm" id="latency" data-testid="latency">—</p>
+        <article class="trace">
+          <h2 class="trace__label">Upload</h2>
+          <p class="trace__value">
+            <span id="upload" data-testid="upload">—</span
+            ><span class="trace__unit" id="upload-unit"></span>
+          </p>
+          <div class="trace__chart" id="upload-chart" data-testid="upload-chart"></div>
         </article>
-        <article class="metric">
-          <h2 class="metric__label">Jitter <span class="metric__qualifier">idle</span></h2>
-          <p class="metric__value metric__value--sm" id="jitter" data-testid="jitter">—</p>
-        </article>
-        <article class="metric">
-          <h2 class="metric__label">Latency <span class="metric__qualifier">loaded ↓</span></h2>
-          <p class="metric__value metric__value--sm" id="down-loaded" data-testid="down-loaded">—</p>
-        </article>
-        <article class="metric">
-          <h2 class="metric__label">Latency <span class="metric__qualifier">loaded ↑</span></h2>
-          <p class="metric__value metric__value--sm" id="up-loaded" data-testid="up-loaded">—</p>
-        </article>
-        <article class="metric">
-          <h2 class="metric__label">Packet loss</h2>
-          <p class="metric__value metric__value--sm" id="packet-loss" data-testid="packet-loss">—</p>
-        </article>
-        <article class="metric">
-          <h2 class="metric__label">Duration</h2>
-          <p class="metric__value metric__value--sm" id="duration" data-testid="duration">—</p>
+
+        <article class="vitals">
+          <div class="vital">
+            <h2 class="vital__label">Latency</h2>
+            <p class="vital__value" id="latency" data-testid="latency">—</p>
+            <p class="vital__loaded">
+              <span class="vital__dir">↓</span>
+              <span id="down-loaded" data-testid="down-loaded">—</span>
+              <span class="vital__dir">↑</span>
+              <span id="up-loaded" data-testid="up-loaded">—</span>
+            </p>
+          </div>
+
+          <div class="vital">
+            <h2 class="vital__label">Jitter</h2>
+            <p class="vital__value" id="jitter" data-testid="jitter">—</p>
+            <p class="vital__loaded">
+              <span class="vital__dir">↓</span>
+              <span id="down-jitter" data-testid="down-jitter">—</span>
+              <span class="vital__dir">↑</span>
+              <span id="up-jitter" data-testid="up-jitter">—</span>
+            </p>
+          </div>
+
+          <div class="vital">
+            <h2 class="vital__label">Packet Loss</h2>
+            <p class="vital__value" id="packet-loss" data-testid="packet-loss">—</p>
+          </div>
+
+          <p class="vital__meta" id="measured-at" data-testid="measured-at"></p>
         </article>
       </section>
 
       <section class="aim" aria-label="Quality ratings">
-        <h2 class="section__title">Suitability</h2>
+        <h2 class="section__title">Network Quality Score</h2>
         <div class="aim__row" id="aim" data-testid="aim"></div>
       </section>
 
       <p class="note" id="precision-note" hidden></p>
 
+      <!-- Per-measurement distributions, in the spirit of the detail panels
+           on speed.cloudflare.com. -->
       <section class="detail" aria-label="Measurement detail">
-        <details id="detail" data-testid="detail">
-          <summary class="detail__summary">
-            Detail — every sample, per measurement
-          </summary>
+        <details id="detail" data-testid="detail" open>
+          <summary class="detail__summary">Measurements — every sample</summary>
           <div class="detail__body" id="detail-body" data-testid="detail-body"></div>
         </details>
       </section>
@@ -107,6 +120,7 @@
       </section>
 
       <footer class="page__foot">
+        <span id="connection" data-testid="connection"></span>
         <span id="profile" data-testid="profile"></span>
         <span id="build" data-testid="build"></span>
       </footer>

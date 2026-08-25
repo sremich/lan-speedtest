@@ -368,14 +368,24 @@ struct Status {
     git_sha: &'static str,
     profile: String,
     history_enabled: bool,
+    /// The requesting client's address.
+    ///
+    /// Stands in for the "server location" panel on speed.cloudflare.com,
+    /// which needs external map tiles — those would leave the LAN, which is
+    /// the one thing this project must not do. Knowing which machine you are
+    /// testing from is the genuinely useful half of that panel anyway.
+    client_ip: String,
+    server_profile_description: String,
 }
 
-async fn status(State(state): State<AppState>) -> impl IntoResponse {
+async fn status(State(state): State<AppState>, client: ClientAddr) -> impl IntoResponse {
     axum::Json(Status {
         version: VERSION,
         git_sha: GIT_SHA,
         profile: state.config.profile.clone(),
         history_enabled: state.history.is_some(),
+        client_ip: client.ip(),
+        server_profile_description: state.config.active_profile().description.clone(),
     })
 }
 
