@@ -21,6 +21,7 @@ stand it all up.
 | [Engine Contract](Engine-Contract.md) | **Start here before touching the backend.** The `@cloudflare/speedtest` request/response contract as verified from source, the config keys that keep traffic local, and the two engine behaviours that shape the whole design |
 | [Architecture](Architecture.md) | How the pieces fit: request flow, what runs where, why each choice |
 | [Reading the Results](Reading-the-Results.md) | What each figure means, the distribution view, and why raw throughput is a separate number |
+| [Client Identity](Client-Identity.md) | Who a run belongs to: reverse DNS, friendly names, trusted proxies, and the addresses that cannot be recovered at all |
 | [Configuration](Configuration.md) | `config/speedtest.toml`, measurement profiles, environment variables |
 | [Development](Development.md) | Local setup, build, run, the WSL/OneDrive specifics |
 | [Testing](Testing.md) | The four tiers, what each gates, how to run them |

@@ -21,6 +21,18 @@ One command, from nothing to serving. Run it again and nothing changes.
   zone, and the TURN credentials.
 - `provisioning/proxmox/provision.toml` pointed at your node.
 
+The provisioner reads those values from its **environment**, not from the file
+directly, so `.env` has to be exported into the shell first. `plan` is
+read-only and needs none of them, which makes it easy to believe everything is
+configured until `apply` stops on the first missing key:
+
+```bash
+set -a && . <(tr -d '' < .env) && set +a
+```
+
+The `tr` is not decorative — an `.env` saved on Windows has CRLF line endings,
+and the trailing carriage return ends up inside the value.
+
 ## Why SSH and not the REST API
 
 The node is driven with `pct` and `pvesh` over SSH. Beyond avoiding an API

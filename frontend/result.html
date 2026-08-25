@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Result — LAN Speed Test</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>&#9889;</text></svg>" />
+  </head>
+  <body>
+    <main class="page">
+      <header class="page__head">
+        <h1 class="page__title" id="page-title" data-testid="result-title">Result</h1>
+        <div class="page__actions">
+          <a class="btn" href="/history.html" data-testid="history-link">History</a>
+          <a class="btn" href="/" data-testid="new-test">New test</a>
+        </div>
+      </header>
+
+      <p class="error" id="error" data-testid="error" hidden></p>
+
+      <!-- Deliberately the same band as the live page: a stored run should
+           look like the run you watched, not like a report about it. -->
+      <section class="band" aria-label="Results">
+        <article class="band__cell trace">
+          <h2 class="trace__label">Download</h2>
+          <p class="trace__value">
+            <span id="download" data-testid="download">—</span
+            ><span class="trace__unit" id="download-unit"></span>
+          </p>
+          <div class="trace__chart" id="download-chart" data-testid="download-chart"></div>
+        </article>
+
+        <article class="band__cell trace">
+          <h2 class="trace__label">Upload</h2>
+          <p class="trace__value">
+            <span id="upload" data-testid="upload">—</span
+            ><span class="trace__unit" id="upload-unit"></span>
+          </p>
+          <div class="trace__chart" id="upload-chart" data-testid="upload-chart"></div>
+        </article>
+
+        <div class="band__cell vitals">
+          <div class="vital">
+            <h2 class="vital__label">Latency</h2>
+            <p class="vital__value" id="latency" data-testid="latency">—</p>
+            <p class="vital__loaded">
+              <span class="vital__dir">↓</span>
+              <span id="down-loaded" data-testid="down-loaded">—</span>
+              <span class="vital__dir">↑</span>
+              <span id="up-loaded" data-testid="up-loaded">—</span>
+            </p>
+          </div>
+
+          <div class="vital">
+            <h2 class="vital__label">Jitter</h2>
+            <p class="vital__value" id="jitter" data-testid="jitter">—</p>
+          </div>
+
+          <div class="vital">
+            <h2 class="vital__label">Packet Loss</h2>
+            <p class="vital__value" id="packet-loss" data-testid="packet-loss">—</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="aim" aria-label="Quality ratings">
+        <h2 class="section__title">Network Quality Score</h2>
+        <div class="aim__row" id="aim" data-testid="aim"></div>
+      </section>
+
+      <section class="detail" aria-label="Measurement detail">
+        <details id="detail" data-testid="detail" open>
+          <summary class="detail__summary">Measurements — every sample</summary>
+          <div class="detail__body" id="detail-body" data-testid="detail-body"></div>
+        </details>
+      </section>
+
+      <footer class="page__foot">
+        <span id="client" data-testid="result-client"></span>
+        <span id="measured-at" data-testid="measured-at"></span>
+        <span id="profile" data-testid="profile"></span>
+        <span id="agent" data-testid="result-agent"></span>
+      </footer>
+    </main>
+
+    <script type="module" src="/src/result.ts"></script>
+  </body>
+</html>

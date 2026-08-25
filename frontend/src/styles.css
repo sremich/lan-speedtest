@@ -673,6 +673,30 @@ body {
 .cell--unit { color: var(--text-dim); font-size: 0.8em; }
 .cell--client { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
 .cell--profile { color: var(--text-dim); font-family: var(--font-num); font-size: 0.8em; }
+.cell--link { text-align: right; white-space: nowrap; }
+
+/* The link back to a stored run. Understated until the row is hovered: it is
+   on every row, and nine identical bright links would be all you saw. */
+.row-link {
+  color: var(--text-dim);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+}
+
+.table tbody tr:hover .row-link { color: var(--accent); border-bottom-color: currentColor; }
+.row-link:focus-visible { color: var(--accent); outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Header text that only assistive technology needs. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
 
 .pill {
   display: inline-block;

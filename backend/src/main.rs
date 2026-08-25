@@ -78,11 +78,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Arc::new(db))
     };
 
-    let state = AppState {
-        payload,
-        config: Arc::new(config),
-        history,
-    };
+    let state = AppState::new(config, payload, history);
     let app = routes::router(state);
 
     // Plain HTTP always listens: it is what the container health check uses,

@@ -27,6 +27,7 @@ jitter and packet loss answer and a plain throughput test does not.
 | Live traces | Download and upload drawn as they are measured, with the reported percentile marked |
 | Distribution | Every sample, per transfer size and latency phase: min, max, mean, median, 25th/75th percentile and outliers |
 | Raw throughput | Parallel-stream figure, on demand, reported separately from the engine's single-stream result |
+| History | Every run stored, with a trend chart, per-client filtering, and a permalink that redraws the run rather than summarising it |
 
 ## Nothing leaves your network
 
@@ -74,6 +75,20 @@ enough to count as loading the connection, so loaded latency is never measured
 [docs/wiki/Configuration.md](docs/wiki/Configuration.md) covers the sizing
 rules.
 
+## Who ran the test
+
+A run is attributed by the address the connection came from — there are no
+accounts here — and labelled from three sources in order of authority: a name
+you typed, a hostname from reverse DNS, then the address itself. The address
+stays visible either way, because a friendly label that replaced it would make
+the history impossible to correlate with a DHCP lease table or a switch port.
+
+Reverse DNS is off by default and range-restricted even when on, and behind a
+reverse proxy `X-Forwarded-For` is believed only from a peer you have named as
+a proxy. [Client Identity](docs/wiki/Client-Identity.md) has the details,
+including the two things that genuinely cannot be recovered: an address
+translated by a Tailscale subnet router, and a browser's own private address.
+
 ## Documentation
 
 The [wiki](docs/wiki/Home.md) is the reference.
@@ -84,10 +99,11 @@ two engine behaviours that shape the whole design.
 
 ## Status
 
-Pre-1.0 and pre-release by policy. The backend, front end and packet-loss relay
-work and are covered by tests at two tiers. Guest provisioning and TLS
-automation (0.4.0) and results history (0.5.0) are still to come; 1.0.0 is
-gated on 10 GbE validation and a packet capture on real hardware.
+Shipping. Backend, front end, packet-loss relay, guest provisioning with TLS
+automation, and results history are all in place, deployed, and covered by
+tests at two tiers on every push. The 10 GbE saturation check was waived; "no
+external traffic" is proven by an end-to-end test on every push rather than by
+a manual packet capture.
 
 Two limitations worth knowing up front, both inherited from the engine:
 

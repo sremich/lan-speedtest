@@ -359,6 +359,18 @@ test('the run reports when it was measured and from where', async ({ page }) => 
   await expect(page.getByTestId('measured-at')).toContainText(/Measured at/);
   // Stands in for the server-location panel: which machine this ran from.
   await expect(page.getByTestId('connection')).toContainText(/client: \S+/);
+
+  // And what sort of address it is, because "why is it always 10.x?" has a
+  // different answer for a LAN address than for one behind a subnet router,
+  // and only one of those answers is "the real address is recoverable".
+  const connection = page.getByTestId('connection');
+  await expect(connection).toContainText(
+    /\((loopback|LAN|link-local|Tailscale or carrier NAT|public)\)/,
+  );
+  expect(
+    await connection.getAttribute('title'),
+    'the classification should explain itself on hover',
+  ).toBeTruthy();
 });
 
 test('the page is named by the server, so a deployment can be renamed', async ({ page }) => {

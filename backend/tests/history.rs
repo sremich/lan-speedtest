@@ -21,12 +21,13 @@ measurements = [ { type = 'download', bytes = 1000, count = 1 } ]
 /// Boots the router with history enabled and connect info wired, which is what
 /// makes the peer address available for attribution.
 async fn serve(history: Option<Arc<History>>) -> String {
-    let config: Config = toml::from_str(CONFIG).unwrap();
-    let state = AppState {
-        payload: PayloadSource::new(4096),
-        config: Arc::new(config),
-        history,
-    };
+    serve_with(CONFIG, history).await
+}
+
+/// The same, with a config of the caller's choosing.
+async fn serve_with(config_toml: &str, history: Option<Arc<History>>) -> String {
+    let config: Config = toml::from_str(config_toml).unwrap();
+    let state = AppState::new(config, PayloadSource::new(4096), history);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -234,13 +235,16 @@ async fn a_result_with_no_measurements_is_rejected() {
 
 #[tokio::test]
 async fn an_oversized_payload_is_refused() {
+    // The cap grew in 1.3.0, because a submission now carries every sample and
+    // not just the summary. Deriving the body from the constant keeps this
+    // test about the behaviour rather than about a particular number.
     let history = Arc::new(History::in_memory().unwrap());
     let base = serve(Some(history)).await;
 
     let res = client()
         .post(format!("{base}/api/results"))
         .header("content-type", "application/json")
-        .body("x".repeat(128 * 1024))
+        .body("x".repeat(lan_speedtest::history::MAX_SUMMARY_BYTES + 1))
         .send()
         .await
         .unwrap();
@@ -316,4 +320,335 @@ async fn status_reports_history_as_enabled_when_it_is() {
         .await
         .unwrap();
     assert_eq!(status["historyEnabled"], true);
+}
+
+#[tokio::test]
+async fn a_run_can_be_read_back_by_id_with_every_sample() {
+    // Item 6 of the request: the history page could start a new test but not
+    // return you to a result. A permalink needs the samples, not just the
+    // headline, or the page it opens is not the page you left.
+    let history = Arc::new(History::in_memory().unwrap());
+    let base = serve(Some(history)).await;
+    let c = client();
+
+    let mut body = submission(9.4e8, "lan-1g");
+    body["points"] = serde_json::json!({
+        "download": [{ "bps": 9.4e8, "bytes": 25_000_000, "ping": 0.7 }],
+        "upload": [{ "bps": 5.0e8, "bytes": 10_000_000, "ping": 0.9 }]
+    });
+
+    let created: serde_json::Value = c
+        .post(format!("{base}/api/results"))
+        .json(&body)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let id = created["id"].as_i64().unwrap();
+
+    let res = c
+        .get(format!("{base}/api/results/{id}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    let run: serde_json::Value = res.json().await.unwrap();
+
+    // The headline is flattened in alongside the detail, so one fetch renders
+    // the whole page.
+    assert_eq!(run["id"], id);
+    assert_eq!(run["download"], 9.4e8);
+    assert_eq!(run["profile"], "lan-1g");
+    assert_eq!(run["summary"]["jitter"], 0.1);
+    assert_eq!(run["points"]["download"][0]["bps"], 9.4e8);
+    assert_eq!(run["points"]["upload"][0]["bytes"], 10_000_000);
+
+    // A link to a run that never existed is a 404, not an empty result that
+    // renders as a run of zeroes.
+    let missing = c
+        .get(format!("{base}/api/results/{}", id + 999))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), 404);
+}
+
+#[tokio::test]
+async fn a_client_can_be_given_a_name_and_have_it_taken_away() {
+    let history = Arc::new(History::in_memory().unwrap());
+    let base = serve(Some(history)).await;
+    let c = client();
+
+    c.post(format!("{base}/api/results"))
+        .json(&submission(9.4e8, "lan-1g"))
+        .send()
+        .await
+        .unwrap();
+
+    let named = c
+        .post(format!("{base}/api/clients/127.0.0.1/name"))
+        .json(&serde_json::json!({ "name": "  Study desktop  " }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(named.status(), 204);
+
+    let runs: serde_json::Value = c
+        .get(format!("{base}/api/history"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        runs[0]["clientName"], "Study desktop",
+        "the name should be trimmed and attached to the run"
+    );
+    assert_eq!(
+        runs[0]["clientIp"], "127.0.0.1",
+        "and the address kept, because the name is a label rather than a replacement"
+    );
+
+    // Clearing it falls back to the address rather than leaving an empty label.
+    let cleared = c
+        .post(format!("{base}/api/clients/127.0.0.1/name"))
+        .json(&serde_json::json!({ "name": "" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(cleared.status(), 204);
+
+    let runs: serde_json::Value = c
+        .get(format!("{base}/api/history"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(runs[0]["clientName"].is_null());
+}
+
+#[tokio::test]
+async fn a_name_for_something_that_is_not_an_address_is_refused() {
+    // The path segment keys a table. Accepting anything at all would let
+    // history fill with rows nothing can ever match.
+    let history = Arc::new(History::in_memory().unwrap());
+    let base = serve(Some(history)).await;
+
+    let res = client()
+        .post(format!("{base}/api/clients/not-an-address/name"))
+        .json(&serde_json::json!({ "name": "nope" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 400);
+}
+
+#[tokio::test]
+async fn a_trusted_proxy_may_speak_for_the_client_behind_it() {
+    // Item 5 of the request: behind a reverse proxy every run was attributed to
+    // the proxy. The header is believed only when the connection comes from a
+    // configured proxy — which is why the untrusted case above still records
+    // the peer.
+    const PROXIED: &str = "
+profile = 'test'
+[server]
+static_dir = 'does-not-exist'
+trusted_proxies = ['127.0.0.0/8']
+[profiles.test]
+measurements = [ { type = 'download', bytes = 1000, count = 1 } ]
+";
+    let history = Arc::new(History::in_memory().unwrap());
+    let base = serve_with(PROXIED, Some(history)).await;
+
+    let res = client()
+        .post(format!("{base}/api/results"))
+        // Two hops: the rightmost is the trusted proxy itself, so the address
+        // to believe is the one before it.
+        .header("x-forwarded-for", "203.0.113.9, 127.0.0.1")
+        .json(&submission(1.0e9, "lan-1g"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 201);
+
+    let runs: serde_json::Value = client()
+        .get(format!("{base}/api/history"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(runs[0]["clientIp"], "203.0.113.9");
+}
+
+#[tokio::test]
+async fn status_says_what_kind_of_address_the_client_has() {
+    // "Why does it always say 10.42.7.3?" is answerable only if the page can
+    // say what sort of address it is looking at.
+    let base = serve(None).await;
+    let status: serde_json::Value = client()
+        .get(format!("{base}/api/status"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    assert_eq!(status["clientIp"], "127.0.0.1");
+    assert_eq!(status["clientKind"], "loopback");
+    assert!(status["clientKindLabel"].as_str().unwrap().len() > 3);
+}
+
+/// A one-shot DNS server that answers whatever it is asked with `answer`.
+///
+/// Real enough to exercise the whole path — the query goes out over UDP and
+/// the reply is parsed by the same code a real resolver's would be — without
+/// depending on the machine running the tests having a reverse zone.
+async fn fake_resolver(answer: &'static str) -> SocketAddr {
+    let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let addr = socket.local_addr().unwrap();
+
+    tokio::spawn(async move {
+        let mut buf = [0u8; 1232];
+        let Ok((read, from)) = socket.recv_from(&mut buf).await else {
+            return;
+        };
+        if read < 13 {
+            return;
+        }
+
+        let mut reply = Vec::new();
+        reply.extend_from_slice(&buf[0..2]); // the query's id, which is checked
+        reply.extend_from_slice(&0x8180u16.to_be_bytes()); // response, no error
+        reply.extend_from_slice(&1u16.to_be_bytes()); // one question
+        reply.extend_from_slice(&1u16.to_be_bytes()); // one answer
+        reply.extend_from_slice(&[0, 0, 0, 0]);
+        reply.extend_from_slice(&buf[12..read]); // the question, echoed back
+
+        reply.extend_from_slice(&0xC00Cu16.to_be_bytes()); // pointer to the question name
+        reply.extend_from_slice(&12u16.to_be_bytes()); // PTR
+        reply.extend_from_slice(&1u16.to_be_bytes()); // IN
+        reply.extend_from_slice(&300u32.to_be_bytes()); // ttl
+
+        let mut rdata = Vec::new();
+        for label in answer.split('.') {
+            rdata.push(label.len() as u8);
+            rdata.extend_from_slice(label.as_bytes());
+        }
+        rdata.push(0);
+        reply.extend_from_slice(&(rdata.len() as u16).to_be_bytes());
+        reply.extend_from_slice(&rdata);
+
+        let _ = socket.send_to(&reply, from).await;
+    });
+
+    addr
+}
+
+#[tokio::test]
+async fn a_client_is_named_from_its_ptr_record() {
+    // Item 4 of the request. The lookup is fired after the run is stored and
+    // never on the request path, so this waits for the name to appear rather
+    // than expecting it in the POST's own response.
+    let resolver = fake_resolver("study-desktop.lan").await;
+    let config = format!(
+        "
+profile = 'test'
+[server]
+static_dir = 'does-not-exist'
+[server.reverse_dns]
+enabled = true
+resolver = '{resolver}'
+# Loopback, because that is where the test client connects from. The shipped
+# default deliberately does not include it.
+ranges = ['127.0.0.0/8']
+[profiles.test]
+measurements = [ {{ type = 'download', bytes = 1000, count = 1 }} ]
+"
+    );
+
+    let history = Arc::new(History::in_memory().unwrap());
+    let base = serve_with(&config, Some(history)).await;
+    let c = client();
+
+    let res = c
+        .post(format!("{base}/api/results"))
+        .json(&submission(9.4e8, "lan-1g"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 201);
+
+    let mut hostname = serde_json::Value::Null;
+    for _ in 0..100 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let runs: serde_json::Value = c
+            .get(format!("{base}/api/history"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        hostname = runs[0]["hostname"].clone();
+        if !hostname.is_null() {
+            break;
+        }
+    }
+    assert_eq!(hostname, "study-desktop.lan");
+}
+
+#[tokio::test]
+async fn an_address_outside_the_configured_ranges_is_never_looked_up() {
+    // The range restriction is the whole safety property: without it, a
+    // deployment reachable from the internet would send a PTR query about
+    // every visitor to its upstream resolver. The resolver here would answer
+    // if asked, so a name appearing at all would be the failure.
+    let resolver = fake_resolver("should-never-be-asked.example").await;
+    let config = format!(
+        "
+profile = 'test'
+[server]
+static_dir = 'does-not-exist'
+[server.reverse_dns]
+enabled = true
+resolver = '{resolver}'
+ranges = ['192.168.0.0/16']
+[profiles.test]
+measurements = [ {{ type = 'download', bytes = 1000, count = 1 }} ]
+"
+    );
+
+    let history = Arc::new(History::in_memory().unwrap());
+    let base = serve_with(&config, Some(history)).await;
+    let c = client();
+
+    c.post(format!("{base}/api/results"))
+        .json(&submission(9.4e8, "lan-1g"))
+        .send()
+        .await
+        .unwrap();
+
+    // Long enough that a lookup, if one were made, would have answered.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let runs: serde_json::Value = c
+        .get(format!("{base}/api/history"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        runs[0]["hostname"].is_null(),
+        "127.0.0.1 is outside the configured ranges and must not be looked up"
+    );
 }

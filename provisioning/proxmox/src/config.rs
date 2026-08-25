@@ -86,6 +86,19 @@ pub struct Guest {
     /// `apply` renames the site.
     #[serde(default)]
     pub site_name: Option<String>,
+    /// Names clients in the history from their PTR records.
+    ///
+    /// Off unless asked for, and range-restricted by the shipped config even
+    /// when on — see docs/wiki/Client-Identity.md for why that restriction is
+    /// not optional. Written into the guest's `.env`, so switching it is a
+    /// re-run of `apply` rather than a rebuild.
+    #[serde(default)]
+    pub reverse_dns: bool,
+    /// `host:port` for the resolver to ask. Unset lets the service read the
+    /// container's own `/etc/resolv.conf`, which is usually right; set it when
+    /// the LAN's PTR zone lives somewhere the container does not point at.
+    #[serde(default)]
+    pub dns_resolver: Option<String>,
     /// Public key installed for root on the guest, so it is reachable by SSH.
     ///
     /// Installed on every run rather than only at creation: `pct create` takes
@@ -221,6 +234,8 @@ mod tests {
             extra_tags: vec![],
             measurement_profile: default_measurement_profile(),
             site_name: None,
+            reverse_dns: false,
+            dns_resolver: None,
             ssh_authorized_key: default_authorized_key(),
         }
     }

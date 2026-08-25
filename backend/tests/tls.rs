@@ -8,7 +8,6 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
 
 use lan_speedtest::{router, AppState, Config, PayloadSource};
 
@@ -76,11 +75,7 @@ async fn serve_tls(cert: &Path, key: &Path) -> String {
         .await
         .expect("loading the generated certificate");
 
-    let state = AppState {
-        payload: PayloadSource::new(4096),
-        config: Arc::new(config),
-        history: None,
-    };
+    let state = AppState::new(config, PayloadSource::new(4096), None);
 
     // Bind first to learn the port, then hand the socket to axum-server.
     let std_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();

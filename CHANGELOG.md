@@ -8,6 +8,70 @@ commit, then tag.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-08-25
+
+Whose run it was, and how to get back to it.
+
+### Added
+
+- **Permalinks to a stored run.** The history page could start a new test but
+  not take you back to a result, so every run you navigated away from was gone.
+  Every sample is now stored with the run, and `/result.html?id=N` *redraws*
+  it — the same traces, the same distributions, the same ratings — rather than
+  summarising it. History rows link to it, and a finished run offers a link to
+  itself.
+
+  The rendering is shared with the live page rather than reimplemented: a
+  stored run should look identical to the run you watched, and it only stays
+  identical if there is one implementation of it.
+
+- **Client hostnames, from reverse DNS.** Off by default, and restricted to
+  configured address ranges even when on: unrestricted, a deployment reachable
+  from the internet would send a PTR query for every visiting address to its
+  upstream resolver — a quiet outbound leak for a cosmetic label. The lookup
+  runs after a run is stored, never on the request path, and both hits and
+  misses are cached.
+
+  The DNS client is hand-rolled rather than a resolver dependency: one query
+  type, one record type, over UDP. Compression pointers are followed with a
+  jump cap and every offset is bounds-checked, because a PTR response is the
+  one input here that is not under local control. Returned names are
+  length-capped and character-restricted before being stored.
+
+- **Editable client names.** A typed name beats a resolved hostname, which
+  beats the address. The address stays visible either way — a label that
+  replaced it would make the history impossible to correlate with a DHCP lease
+  table or a switch port. Names are per-client, not per-run.
+
+- **Trusted-proxy `X-Forwarded-For`.** Behind a reverse proxy every run was
+  attributed to the proxy. Naming the proxy in `server.trusted_proxies` makes
+  the header believable *from that peer only*; the header from anyone else is
+  still ignored, because otherwise any client on the LAN could file a run under
+  any address it liked.
+
+- **The address is classified and labelled.** loopback, LAN,
+  `Tailscale or carrier NAT`, link-local, or public — with a note on hover
+  explaining what that means for the number shown. See
+  [Client Identity](docs/wiki/Client-Identity.md), which also records the
+  honest negative results: an address translated by a Tailscale subnet router
+  cannot be recovered at all, and a browser will not disclose its own private
+  address to a page.
+
+### Changed
+
+- The stored-result size cap is larger, because a submission now carries every
+  sample rather than only the summary. Samples over their own cap are dropped
+  and the run kept: the measurement succeeded, and losing it over the size of
+  its detail would not be an improvement.
+
+- Provisioning gained `guest.reverse_dns` and `guest.dns_resolver`, written
+  into the guest's `.env`, so switching hostname lookups on is a re-run of
+  `apply` rather than a rebuild. It is on in the shipped `provision.toml`.
+
+- The trace hover, the box plots and the packet-loss bar moved into
+  `frontend/src/runview.ts` and are shared with the permalink rather than
+  reimplemented for it.
+
 ## [1.2.0] - 2026-08-25
 
 The measurement made legible.
@@ -463,7 +527,8 @@ milestone increments.
 - Tier-4 hardware validation outstanding; releases stay pre-release until it
   passes.
 
-[Unreleased]: https://github.com/sremich/self-hosted-cloudflare-speedtest/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/sremich/self-hosted-cloudflare-speedtest/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v1.3.0
 [1.2.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v1.2.0
 [1.1.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v1.1.0
 [1.0.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v1.0.0

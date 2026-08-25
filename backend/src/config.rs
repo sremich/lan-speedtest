@@ -78,6 +78,51 @@ pub struct ServerConfig {
     /// is what the contract tests and the e2e suite use.
     #[serde(default = "default_history_db")]
     pub history_db: String,
+    /// CIDR blocks whose `X-Forwarded-For` header may be believed.
+    ///
+    /// Empty by default, and that default is the safe one: with no proxy in
+    /// front, honouring the header would let anyone on the LAN attribute a run
+    /// to any address they chose. List a proxy here only if you run one.
+    #[serde(default)]
+    pub trusted_proxies: Vec<String>,
+    #[serde(default)]
+    pub reverse_dns: ReverseDnsConfig,
+}
+
+/// Naming clients by reverse lookup.
+///
+/// Restricted to explicit address ranges on purpose. Unrestricted, a
+/// public-facing deployment would send PTR queries for internet addresses to
+/// whatever upstream resolver it has — a quiet leak, for a cosmetic label.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReverseDnsConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// `host:port`. Empty means the first `nameserver` in `/etc/resolv.conf`.
+    #[serde(default)]
+    pub resolver: String,
+    /// Only addresses inside these blocks are ever looked up.
+    #[serde(default = "default_reverse_dns_ranges")]
+    pub ranges: Vec<String>,
+    #[serde(default = "default_reverse_dns_timeout_ms")]
+    pub timeout_ms: u64,
+    /// How long a resolved (or unresolvable) name is trusted before another
+    /// lookup is worth making.
+    #[serde(default = "default_reverse_dns_ttl_secs")]
+    pub ttl_secs: u64,
+}
+
+impl Default for ReverseDnsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            resolver: String::new(),
+            ranges: default_reverse_dns_ranges(),
+            timeout_ms: default_reverse_dns_timeout_ms(),
+            ttl_secs: default_reverse_dns_ttl_secs(),
+        }
+    }
 }
 
 impl Default for ServerConfig {
@@ -92,6 +137,8 @@ impl Default for ServerConfig {
             tls_cert_file: None,
             tls_key_file: None,
             history_db: default_history_db(),
+            trusted_proxies: Vec::new(),
+            reverse_dns: ReverseDnsConfig::default(),
         }
     }
 }
@@ -220,6 +267,21 @@ fn default_tls_bind() -> String {
 fn default_history_db() -> String {
     "data/history.db".to_string()
 }
+fn default_reverse_dns_ranges() -> Vec<String> {
+    vec![
+        "10.0.0.0/8".into(),
+        "172.16.0.0/12".into(),
+        "192.168.0.0/16".into(),
+        "100.64.0.0/10".into(),
+        "fc00::/7".into(),
+    ]
+}
+fn default_reverse_dns_timeout_ms() -> u64 {
+    500
+}
+fn default_reverse_dns_ttl_secs() -> u64 {
+    6 * 60 * 60
+}
 fn default_true() -> bool {
     true
 }
@@ -245,6 +307,11 @@ pub enum ConfigError {
     },
     TurnEnabledWithoutCredentials,
     HalfConfiguredTls,
+    BadCidr {
+        field: &'static str,
+        detail: String,
+    },
+    BadResolver(String),
 }
 
 impl std::fmt::Display for ConfigError {
@@ -270,6 +337,11 @@ impl std::fmt::Display for ConfigError {
                 f,
                 "exactly one of server.tls_cert_file / server.tls_key_file is set. \
                  Set both to serve HTTPS, or neither to serve plain HTTP"
+            ),
+            Self::BadCidr { field, detail } => write!(f, "server.{field}: {detail}"),
+            Self::BadResolver(detail) => write!(
+                f,
+                "server.reverse_dns.resolver: {detail} (expected host:port, e.g. 10.0.0.1:53)"
             ),
         }
     }
@@ -324,6 +396,20 @@ impl Config {
         if let Some(v) = non_empty_env("SPEEDTEST_TURN_PASS") {
             self.turn.pass = v;
         }
+        if let Some(v) = non_empty_env("SPEEDTEST_TRUSTED_PROXIES") {
+            self.server.trusted_proxies = v
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+        }
+        if let Some(v) = non_empty_env("SPEEDTEST_REVERSE_DNS") {
+            self.server.reverse_dns.enabled =
+                matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes");
+        }
+        if let Some(v) = non_empty_env("SPEEDTEST_DNS_RESOLVER") {
+            self.server.reverse_dns.resolver = v;
+        }
         if let Some(v) = non_empty_env("SPEEDTEST_TURN_ENABLED") {
             self.turn.enabled = matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes");
         }
@@ -374,6 +460,29 @@ impl Config {
         // looks like it worked right up until a browser refuses to connect.
         if self.server.tls_cert_file.is_some() != self.server.tls_key_file.is_some() {
             return Err(ConfigError::HalfConfiguredTls);
+        }
+
+        // Parsed at startup rather than per request. A typo in a trusted-proxy
+        // block would otherwise fail open — the block simply never matching —
+        // which looks identical to a correctly configured deployment.
+        for raw in &self.server.trusted_proxies {
+            crate::netid::Cidr::parse(raw).map_err(|detail| ConfigError::BadCidr {
+                field: "trusted_proxies",
+                detail,
+            })?;
+        }
+        for raw in &self.server.reverse_dns.ranges {
+            crate::netid::Cidr::parse(raw).map_err(|detail| ConfigError::BadCidr {
+                field: "reverse_dns.ranges",
+                detail,
+            })?;
+        }
+        if !self.server.reverse_dns.resolver.is_empty() {
+            self.server
+                .reverse_dns
+                .resolver
+                .parse::<std::net::SocketAddr>()
+                .map_err(|e| ConfigError::BadResolver(e.to_string()))?;
         }
 
         Ok(())

@@ -84,6 +84,24 @@ most one sample inside a short LAN transfer, and jitter needs two.
 | `max_transfer_bytes` | 2 GiB | Hard per-request ceiling. Startup fails if a profile exceeds it |
 | `download_chunk_bytes` | 4 MiB | Shared payload buffer, sliced per request |
 | `static_dir` | `static` | Built front-end assets |
+| `trusted_proxies` | `[]` | CIDR blocks whose `X-Forwarded-For` may be believed. Empty means the connection's peer decides, which is the right default with no proxy in front |
+
+### `[server.reverse_dns]`
+
+Off by default. See [Client Identity](Client-Identity.md) for what it does,
+what it deliberately will not do, and why the range restriction is not
+optional.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | Look up client hostnames at all |
+| `resolver` | `""` | `host:port`. Empty reads the first `nameserver` from `/etc/resolv.conf` |
+| `ranges` | RFC 1918, `100.64.0.0/10`, `fc00::/7` | The only addresses ever looked up |
+| `timeout_ms` | `500` | Per-query timeout |
+| `ttl_secs` | `21600` | How long a name — or a remembered miss — is trusted |
+
+Every CIDR and the resolver address are parsed at startup, so a typo is a
+refusal to boot rather than a feature that silently never works.
 
 ## Choosing a profile
 
@@ -141,6 +159,10 @@ See [TURN and Packet Loss](TURN-and-Packet-Loss.md).
 | `SPEEDTEST_TURN_URI` | `turn.uri` |
 | `SPEEDTEST_TURN_USER` | `turn.user` |
 | `SPEEDTEST_TURN_PASS` | `turn.pass` |
+| `SPEEDTEST_TRUSTED_PROXIES` | `server.trusted_proxies` (comma-separated) |
+| `SPEEDTEST_REVERSE_DNS` | `server.reverse_dns.enabled` (`1`/`true`/`yes`) |
+| `SPEEDTEST_DNS_RESOLVER` | `server.reverse_dns.resolver` |
+| `SPEEDTEST_HISTORY_DB` | `server.history_db`; empty disables history |
 | `SPEEDTEST_LOG` | Log filter (`info`, `debug`, …) |
 
 `GET /api/profiles` lists what the picker can offer; `GET /api/profile?name=X`

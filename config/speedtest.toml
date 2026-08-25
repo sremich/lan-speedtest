@@ -26,6 +26,28 @@ max_transfer_bytes = 2147483648
 # allocation — that would make the backend the bottleneck it exists to avoid.
 download_chunk_bytes = 4194304
 static_dir = "static"
+# Proxies whose X-Forwarded-For may be believed. Empty means none, and the
+# connection's own peer address decides who a run belongs to — which is the
+# right default: with no proxy in front, believing the header would let any
+# client on the LAN file a run under any address it liked. Put the reverse
+# proxy's address here (CIDR notation) if there is one, and only then.
+trusted_proxies = []
+
+[server.reverse_dns]
+# Names clients in the history by asking for their PTR record. Off by default,
+# and restricted to the ranges below even when on: unrestricted, a
+# public-facing deployment would send PTR queries for internet addresses to
+# whatever upstream resolver it has — a quiet leak, for a cosmetic label.
+#
+# The lookup happens after a run is stored, never on the request path, and a
+# resolved name (or a resolved miss) is cached for ttl_secs.
+enabled = false
+# host:port. Empty reads the first nameserver from /etc/resolv.conf.
+resolver = ""
+# RFC 1918, CGNAT/Tailscale, and unique-local v6.
+ranges = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "fc00::/7"]
+timeout_ms = 500
+ttl_secs = 21600
 
 [turn]
 # Enables the packet-loss stage. When false the stage is stripped from the

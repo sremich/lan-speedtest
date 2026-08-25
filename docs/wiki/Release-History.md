@@ -1,8 +1,30 @@
 # Release history
 
-Versions are three-part `X.Y.Z`. While the major version is 0, every release is
-a GitHub pre-release — tier-4 validation (10 GbE saturation and a packet
-capture proving no external traffic) gates 1.0.0.
+Versions are three-part `X.Y.Z`. Releases below 1.0.0 were marked as GitHub
+pre-releases; from 1.0.0 they are full releases. The 10 GbE saturation check
+was waived, and "no external traffic" is proven by an end-to-end test on every
+push rather than by a manual packet capture.
+
+## 1.3.0
+
+Whose run it was, and how to get back to it.
+
+- **Permalinks.** Every run stores its samples, and `/result.html?id=N`
+  redraws it — the same traces, distributions and ratings — through the same
+  renderer the live page uses. History rows link to it; a finished run links to
+  itself.
+- **Reverse DNS**, off by default and restricted to configured private ranges
+  even when on. The lookup runs after a run is stored, never on the request
+  path, and both hits and misses are cached. Enabled for the deployed guest via
+  `guest.reverse_dns` in `provision.toml`.
+- **Editable client names**, which beat a resolved hostname, which beats the
+  address. The address stays visible either way.
+- **Trusted-proxy `X-Forwarded-For`** via `server.trusted_proxies`, believed
+  only from a peer named there.
+- **The address is classified** — loopback, LAN, Tailscale or carrier NAT,
+  link-local, public — with a note explaining what that means for the number
+  shown. See [Client Identity](Client-Identity.md), which also records what
+  cannot be recovered at all.
 
 ## 1.2.0
 

@@ -18,7 +18,15 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 /// Ignore absurd payloads outright rather than storing them.
-pub const MAX_SUMMARY_BYTES: usize = 64 * 1024;
+///
+/// Generous since 1.3.0, because a submission now carries every sample rather
+/// than just the summary — a `lan-10g` run is a few tens of kilobytes.
+pub const MAX_SUMMARY_BYTES: usize = 512 * 1024;
+
+/// Samples larger than this are dropped and the run kept without them. The
+/// measurement succeeded; losing it over the size of its detail would not be
+/// an improvement.
+const MAX_POINTS_BYTES: usize = 256 * 1024;
 
 #[derive(Debug)]
 pub enum HistoryError {
@@ -69,6 +77,14 @@ pub struct ResultSubmission {
     /// Which measurement profile produced this.
     #[serde(default)]
     pub profile: String,
+    /// Every sample the engine collected, passed through untyped.
+    ///
+    /// Stored verbatim for the same reason the summary is: giving it a schema
+    /// here would mean tracking the engine's, and a permalink that can only
+    /// show the fields we thought of is a worse permalink. Only the front end
+    /// interprets this.
+    #[serde(default)]
+    pub points: serde_json::Value,
 }
 
 /// The subset of the engine summary we give columns to.
@@ -107,7 +123,10 @@ pub struct StoredRun {
     /// RFC 3339, UTC.
     pub recorded_at: String,
     pub client_ip: String,
+    /// A name someone chose. Beats anything resolved.
     pub client_name: Option<String>,
+    /// A name from reverse DNS, if one was found.
+    pub hostname: Option<String>,
     pub user_agent: String,
     pub profile: String,
     pub download: Option<f64>,
@@ -119,6 +138,18 @@ pub struct StoredRun {
     pub packet_loss: Option<f64>,
     pub total_duration_ms: Option<f64>,
     pub scores: std::collections::BTreeMap<String, String>,
+}
+
+/// A single run with everything kept about it, for a permalink.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredRunDetail {
+    #[serde(flatten)]
+    pub run: StoredRun,
+    /// The engine summary as submitted.
+    pub summary: serde_json::Value,
+    /// Every sample, as submitted. `{}` for runs stored before 1.3.0.
+    pub points: serde_json::Value,
 }
 
 pub struct History {
@@ -175,12 +206,45 @@ impl History {
              CREATE TABLE IF NOT EXISTS client_names (
                  client_ip TEXT PRIMARY KEY,
                  name      TEXT NOT NULL
+             );
+
+             -- Names found by reverse lookup, kept apart from the ones people
+             -- chose so a PTR record can never overwrite a deliberate name.
+             -- An empty name is a remembered miss, which stops a client with
+             -- no PTR record being looked up on every single run.
+             CREATE TABLE IF NOT EXISTS resolved_names (
+                 client_ip   TEXT PRIMARY KEY,
+                 name        TEXT NOT NULL,
+                 resolved_at TEXT NOT NULL
              );",
         )?;
+
+        Self::add_missing_columns(&conn)?;
 
         Ok(Self {
             conn: Mutex::new(conn),
         })
+    }
+
+    /// Brings an existing database up to the current shape.
+    ///
+    /// `CREATE TABLE IF NOT EXISTS` does nothing for a table that already
+    /// exists, so a column added after a deployment has to be added
+    /// explicitly. Checked rather than attempted-and-ignored: swallowing the
+    /// error would also swallow a real one.
+    fn add_missing_columns(conn: &Connection) -> Result<(), HistoryError> {
+        let mut stmt = conn.prepare("PRAGMA table_info(runs)")?;
+        let existing: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<Result<_, _>>()?;
+
+        if !existing.iter().any(|c| c == "points_json") {
+            conn.execute(
+                "ALTER TABLE runs ADD COLUMN points_json TEXT NOT NULL DEFAULT '{}'",
+                [],
+            )?;
+        }
+        Ok(())
     }
 
     /// Stores a completed run and returns its id.
@@ -197,6 +261,10 @@ impl History {
 
         let summary_json = serde_json::to_string(&submission.summary)?;
         let scores_json = serde_json::to_string(&submission.scores)?;
+        let points_json = match serde_json::to_string(&submission.points) {
+            Ok(j) if j.len() <= MAX_POINTS_BYTES => j,
+            _ => "{}".to_string(),
+        };
 
         let conn = self.conn.lock().expect("history mutex");
         conn.execute(
@@ -204,8 +272,8 @@ impl History {
                  recorded_at, client_ip, user_agent, profile,
                  download, upload, latency, jitter,
                  down_loaded_latency, up_loaded_latency, packet_loss,
-                 total_duration_ms, scores_json, summary_json
-             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+                 total_duration_ms, scores_json, summary_json, points_json
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
             params![
                 recorded_at,
                 client_ip,
@@ -221,6 +289,7 @@ impl History {
                 submission.summary.total_duration_ms,
                 scores_json,
                 summary_json,
+                points_json,
             ],
         )?;
         Ok(conn.last_insert_rowid())
@@ -238,9 +307,10 @@ impl History {
         let sql = "SELECT r.id, r.recorded_at, r.client_ip, c.name, r.user_agent, r.profile,
                           r.download, r.upload, r.latency, r.jitter,
                           r.down_loaded_latency, r.up_loaded_latency, r.packet_loss,
-                          r.total_duration_ms, r.scores_json
+                          r.total_duration_ms, r.scores_json, n.name
                    FROM runs r
                    LEFT JOIN client_names c ON c.client_ip = r.client_ip
+                   LEFT JOIN resolved_names n ON n.client_ip = r.client_ip
                    WHERE (?1 IS NULL OR r.client_ip = ?1)
                    ORDER BY r.recorded_at DESC, r.id DESC
                    LIMIT ?2";
@@ -253,6 +323,7 @@ impl History {
                 recorded_at: row.get(1)?,
                 client_ip: row.get(2)?,
                 client_name: row.get(3)?,
+                hostname: non_empty(row.get::<_, Option<String>>(15)?),
                 user_agent: row.get(4)?,
                 profile: row.get(5)?,
                 download: row.get(6)?,
@@ -274,9 +345,10 @@ impl History {
     pub fn clients(&self) -> Result<Vec<ClientSummary>, HistoryError> {
         let conn = self.conn.lock().expect("history mutex");
         let mut stmt = conn.prepare(
-            "SELECT r.client_ip, c.name, COUNT(*), MAX(r.recorded_at)
+            "SELECT r.client_ip, c.name, COUNT(*), MAX(r.recorded_at), n.name
              FROM runs r
              LEFT JOIN client_names c ON c.client_ip = r.client_ip
+             LEFT JOIN resolved_names n ON n.client_ip = r.client_ip
              GROUP BY r.client_ip
              ORDER BY MAX(r.recorded_at) DESC",
         )?;
@@ -284,6 +356,7 @@ impl History {
             Ok(ClientSummary {
                 client_ip: row.get(0)?,
                 client_name: row.get(1)?,
+                hostname: non_empty(row.get::<_, Option<String>>(4)?),
                 runs: row.get(2)?,
                 last_seen: row.get(3)?,
             })
@@ -296,16 +369,102 @@ impl History {
         Ok(conn.query_row("SELECT COUNT(*) FROM runs", [], |r| r.get(0))?)
     }
 
-    /// Names a client. Used by the `[later]` friendly-naming feature; the table
-    /// exists now so history does not need a migration to gain it.
+    /// Names a client by hand. An empty name clears it, falling back to
+    /// whatever reverse DNS found, and then to the address.
     pub fn set_client_name(&self, client_ip: &str, name: &str) -> Result<(), HistoryError> {
         let conn = self.conn.lock().expect("history mutex");
+        let name = name.trim();
+        if name.is_empty() {
+            conn.execute(
+                "DELETE FROM client_names WHERE client_ip = ?1",
+                params![client_ip],
+            )?;
+            return Ok(());
+        }
         conn.execute(
             "INSERT INTO client_names (client_ip, name) VALUES (?1, ?2)
              ON CONFLICT(client_ip) DO UPDATE SET name = excluded.name",
             params![client_ip, name],
         )?;
         Ok(())
+    }
+
+    /// A cached reverse-lookup result and when it was taken, if any.
+    ///
+    /// An entry with an empty name is a remembered miss — a client with no PTR
+    /// record should not be looked up again on every run.
+    pub fn resolved_name(&self, client_ip: &str) -> Result<Option<(String, String)>, HistoryError> {
+        let conn = self.conn.lock().expect("history mutex");
+        Ok(conn
+            .query_row(
+                "SELECT name, resolved_at FROM resolved_names WHERE client_ip = ?1",
+                params![client_ip],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?)
+    }
+
+    pub fn record_resolved_name(
+        &self,
+        client_ip: &str,
+        name: &str,
+        resolved_at: &str,
+    ) -> Result<(), HistoryError> {
+        let conn = self.conn.lock().expect("history mutex");
+        conn.execute(
+            "INSERT INTO resolved_names (client_ip, name, resolved_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(client_ip) DO UPDATE SET
+                 name = excluded.name, resolved_at = excluded.resolved_at",
+            params![client_ip, name, resolved_at],
+        )?;
+        Ok(())
+    }
+
+    /// One run in full, for a permalink.
+    pub fn by_id(&self, id: i64) -> Result<Option<StoredRunDetail>, HistoryError> {
+        let conn = self.conn.lock().expect("history mutex");
+        let row = conn
+            .query_row(
+                "SELECT r.id, r.recorded_at, r.client_ip, c.name, r.user_agent, r.profile,
+                        r.download, r.upload, r.latency, r.jitter,
+                        r.down_loaded_latency, r.up_loaded_latency, r.packet_loss,
+                        r.total_duration_ms, r.scores_json, n.name,
+                        r.summary_json, r.points_json
+                 FROM runs r
+                 LEFT JOIN client_names c ON c.client_ip = r.client_ip
+                 LEFT JOIN resolved_names n ON n.client_ip = r.client_ip
+                 WHERE r.id = ?1",
+                params![id],
+                |row| {
+                    let scores_json: String = row.get(14)?;
+                    let summary_json: String = row.get(16)?;
+                    let points_json: String = row.get(17)?;
+                    Ok(StoredRunDetail {
+                        run: StoredRun {
+                            id: row.get(0)?,
+                            recorded_at: row.get(1)?,
+                            client_ip: row.get(2)?,
+                            client_name: row.get(3)?,
+                            hostname: non_empty(row.get::<_, Option<String>>(15)?),
+                            user_agent: row.get(4)?,
+                            profile: row.get(5)?,
+                            download: row.get(6)?,
+                            upload: row.get(7)?,
+                            latency: row.get(8)?,
+                            jitter: row.get(9)?,
+                            down_loaded_latency: row.get(10)?,
+                            up_loaded_latency: row.get(11)?,
+                            packet_loss: row.get(12)?,
+                            total_duration_ms: row.get(13)?,
+                            scores: serde_json::from_str(&scores_json).unwrap_or_default(),
+                        },
+                        summary: serde_json::from_str(&summary_json).unwrap_or_default(),
+                        points: serde_json::from_str(&points_json).unwrap_or_default(),
+                    })
+                },
+            )
+            .optional()?;
+        Ok(row)
     }
 
     pub fn client_name(&self, client_ip: &str) -> Result<Option<String>, HistoryError> {
@@ -325,8 +484,25 @@ impl History {
 pub struct ClientSummary {
     pub client_ip: String,
     pub client_name: Option<String>,
+    pub hostname: Option<String>,
     pub runs: i64,
     pub last_seen: String,
+}
+
+/// `Some("")` is how a remembered miss is stored; it is not a name.
+fn non_empty(value: Option<String>) -> Option<String> {
+    value.filter(|s| !s.trim().is_empty())
+}
+
+/// How long ago an RFC 3339 timestamp was, or `None` if it will not parse.
+///
+/// A clock that has moved backwards yields zero rather than a negative age, so
+/// a cache entry stamped in the future expires immediately instead of never.
+pub fn age_since(timestamp: &str) -> Option<std::time::Duration> {
+    use time::format_description::well_known::Rfc3339;
+    let then = time::OffsetDateTime::parse(timestamp, &Rfc3339).ok()?;
+    let delta = time::OffsetDateTime::now_utc() - then;
+    Some(delta.try_into().unwrap_or(std::time::Duration::ZERO))
 }
 
 /// Current time as RFC 3339 in UTC.
@@ -360,6 +536,7 @@ mod tests {
             .into_iter()
             .collect(),
             profile: "lan-1g".into(),
+            points: serde_json::json!({ "download": [{ "bps": download }] }),
         }
     }
 
@@ -443,6 +620,7 @@ mod tests {
             summary: SubmittedSummary::default(),
             scores: Default::default(),
             profile: "quick".into(),
+            points: serde_json::Value::Null,
         };
         assert!(matches!(
             h.record(&empty, "10.0.0.1", "ua", "2026-08-24T10:00:00Z"),
@@ -462,6 +640,7 @@ mod tests {
             },
             scores: Default::default(),
             profile: "quick".into(),
+            points: serde_json::Value::Null,
         };
         h.record(&partial, "10.0.0.1", "ua", "2026-08-24T10:00:00Z")
             .unwrap();

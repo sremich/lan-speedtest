@@ -12,10 +12,11 @@ export default defineConfig({
     outDir: 'dist',
     emptyOutDir: true,
     rollupOptions: {
-      // Two pages, each a plain static asset for the Rust server to serve.
+      // Three pages, each a plain static asset for the Rust server to serve.
       input: {
         index: resolve(__dirname, 'index.html'),
         history: resolve(__dirname, 'history.html'),
+        result: resolve(__dirname, 'result.html'),
       },
       output: { manualChunks: undefined },
     },

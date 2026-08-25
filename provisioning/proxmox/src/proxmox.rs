@@ -393,6 +393,8 @@ mod tests {
             extra_tags: vec![],
             measurement_profile: "lan-1g".into(),
             site_name: None,
+            reverse_dns: false,
+            dns_resolver: None,
             ssh_authorized_key: "~/.ssh/id_ed25519.pub".into(),
         }
     }

@@ -7,7 +7,7 @@
  */
 
 import './styles.css';
-import { fetchStatus } from './api';
+import { fetchStatus, setClientName } from './api';
 import { formatBandwidth, formatLatency, formatPacketLoss } from './format';
 
 interface StoredRun {
@@ -15,6 +15,8 @@ interface StoredRun {
   recordedAt: string;
   clientIp: string;
   clientName: string | null;
+  /** What reverse DNS found for the address, if anything. */
+  hostname: string | null;
   userAgent: string;
   profile: string;
   download: number | null;
@@ -31,6 +33,7 @@ interface StoredRun {
 interface ClientSummary {
   clientIp: string;
   clientName: string | null;
+  hostname: string | null;
   runs: number;
   lastSeen: string;
 }
@@ -44,11 +47,15 @@ const el = <T extends HTMLElement>(id: string): T => {
 /** The most recent load, kept so a resize can redraw without refetching. */
 let lastRuns: StoredRun[] = [];
 
+/** The clients the filter knows about, so renaming can find the selected one. */
+let knownClients: ClientSummary[] = [];
+
 const ui = {
   title: el('page-title'),
   chart: el('chart'),
   rows: el('rows'),
   clientFilter: el<HTMLSelectElement>('client-filter'),
+  rename: el<HTMLButtonElement>('rename'),
   empty: el('empty'),
   error: el('error'),
   count: el('count'),
@@ -63,8 +70,20 @@ function esc(s: string): string {
     .replace(/"/g, '&quot;');
 }
 
-function clientLabel(run: { clientName: string | null; clientIp: string }): string {
-  return run.clientName ?? run.clientIp;
+/**
+ * What to call a client.
+ *
+ * A name you typed wins, then whatever reverse DNS found, then the address —
+ * which is always shown somewhere as well, because a friendly label that
+ * replaced the address outright would make history impossible to correlate
+ * with anything else on the network.
+ */
+function clientLabel(run: {
+  clientName: string | null;
+  hostname?: string | null;
+  clientIp: string;
+}): string {
+  return run.clientName ?? run.hostname ?? run.clientIp;
 }
 
 /** Short, unambiguous local time. */
@@ -220,9 +239,14 @@ function renderRows(runs: StoredRun[]): void {
       const ratings = Object.entries(r.scores)
         .map(([k, v]) => `<span class="pill rating--${esc(v)}" title="${esc(k)}">${esc(v)}</span>`)
         .join(' ');
+      // The address goes in the tooltip alongside the user agent, so a named
+      // client is still identifiable without widening the column.
+      const who = clientLabel(r);
+      const detail = who === r.clientIp ? r.userAgent : `${r.clientIp}
+${r.userAgent}`;
       return `<tr>
         <td>${esc(formatWhen(r.recordedAt))}</td>
-        <td class="cell--client" title="${esc(r.userAgent)}">${esc(clientLabel(r))}</td>
+        <td class="cell--client" title="${esc(detail)}">${esc(who)}</td>
         <td class="cell--num">${down.value}<span class="cell--unit"> ${down.unit}</span></td>
         <td class="cell--num">${up.value}<span class="cell--unit"> ${up.unit}</span></td>
         <td class="cell--num">${esc(formatLatency(r.latency))}</td>
@@ -230,6 +254,9 @@ function renderRows(runs: StoredRun[]): void {
         <td class="cell--num">${esc(formatPacketLoss(r.packetLoss ?? undefined))}</td>
         <td class="cell--ratings">${ratings}</td>
         <td class="cell--profile">${esc(r.profile)}</td>
+        <td class="cell--link">
+          <a class="row-link" href="/result.html?id=${r.id}" data-testid="open-result">Open</a>
+        </td>
       </tr>`;
     })
     .join('');
@@ -258,6 +285,7 @@ async function loadClients(): Promise<void> {
   if (!res.ok) return;
   const clients = (await res.json()) as ClientSummary[];
 
+  knownClients = clients;
   const options = ['<option value="all">All clients</option>']
     .concat(
       clients.map(
@@ -267,9 +295,51 @@ async function loadClients(): Promise<void> {
     )
     .join('');
   ui.clientFilter.innerHTML = options;
+  updateRenameControl();
 }
 
+/**
+ * Renaming applies to whichever client is being filtered on.
+ *
+ * Deliberately not a per-row control: the name belongs to the client, not to
+ * one of its runs, and a rename button on every row would suggest otherwise.
+ */
+function updateRenameControl(): void {
+  const ip = ui.clientFilter.value;
+  const selected = knownClients.find((c) => c.clientIp === ip);
+  ui.rename.hidden = selected === undefined;
+  if (selected) {
+    ui.rename.textContent = selected.clientName ? 'Rename client' : 'Name this client';
+  }
+}
+
+ui.rename.addEventListener('click', () => {
+  const ip = ui.clientFilter.value;
+  const selected = knownClients.find((c) => c.clientIp === ip);
+  if (!selected) return;
+
+  const suggested = selected.clientName ?? selected.hostname ?? '';
+  const entered = window.prompt(
+    `Name for ${ip}. Leave it empty to go back to the address.`,
+    suggested,
+  );
+  // Cancel is null, and means leave it alone; an empty string is a decision.
+  if (entered === null) return;
+
+  void (async () => {
+    if (!(await setClientName(ip, entered))) {
+      showError('Could not save that name.');
+      return;
+    }
+    await loadClients();
+    ui.clientFilter.value = ip;
+    updateRenameControl();
+    await load();
+  })().catch(showError);
+});
+
 ui.clientFilter.addEventListener('change', () => {
+  updateRenameControl();
   void load().catch(showError);
 });
 

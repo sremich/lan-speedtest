@@ -6,7 +6,7 @@
  */
 
 import SpeedTest from '@cloudflare/speedtest';
-import type { BandwidthPoint, MeasurementSummary, Results, Scores } from '@cloudflare/speedtest';
+import type { MeasurementSummary, Results, Scores } from '@cloudflare/speedtest';
 
 import './styles.css';
 import {
@@ -25,17 +25,17 @@ import {
   formatPacketLoss,
   latencyIsAtBrowserResolution,
 } from './format';
-import { renderAreaChart, type SamplePosition } from './areachart';
-import { BOXPLOT_LEGEND, renderBoxPlots } from './boxplot';
 import { measureParallelThroughput, suggestedProfile } from './parallel';
+import { formatPayload, planStages, renderChevrons, totalRequests, type Stage } from './progress';
+import { formatTransferSize, summarise } from './stats';
 import {
-  formatPayload,
-  planStages,
-  renderChevrons,
-  totalRequests,
-  type Stage,
-} from './progress';
-import { bandwidthBySize, formatTransferSize, summarise, type Distribution } from './stats';
+  attachTraceHover,
+  drawTrace,
+  placeTip,
+  renderDetail,
+  tipRow,
+  type RunSamples,
+} from './runview';
 
 type Engine = InstanceType<typeof SpeedTest>;
 
@@ -53,20 +53,6 @@ let currentEngine: Engine | undefined;
  * it does mean a resize needs a redraw rather than doing nothing.
  */
 let lastResults: Results | undefined;
-
-/** What a trace needs to answer a hover: where it drew each sample, and what
- *  that sample actually was. Kept together so the two cannot drift apart. */
-interface TraceState {
-  positions: readonly SamplePosition[];
-  points: BandwidthPoint[];
-  colour: string;
-  label: string;
-}
-
-const traces: Record<'download' | 'upload', TraceState> = {
-  download: { positions: [], points: [], colour: 'var(--accent)', label: 'Download' },
-  upload: { positions: [], points: [], colour: 'var(--upload)', label: 'Upload' },
-};
 
 /** The planned stages of the current run, and how far through them we are. */
 let stages: Stage[] = [];
@@ -111,6 +97,7 @@ const ui = {
   profile: el('profile'),
   build: el('build'),
   historyLink: el<HTMLAnchorElement>('history-link'),
+  permalink: el<HTMLAnchorElement>('permalink'),
   downLoaded: el('down-loaded'),
   upLoaded: el('up-loaded'),
   downJitter: el('down-jitter'),
@@ -134,6 +121,25 @@ const AIM_LABELS: Record<string, string> = {
   streaming: 'Streaming',
   gaming: 'Gaming',
   rtc: 'Video calls',
+};
+
+/**
+ * Why the address on screen is the address on screen.
+ *
+ * Asked repeatedly, and the honest answers differ: a private address behind a
+ * subnet router cannot be recovered at all, because the translation happens at
+ * layer 3 and leaves no header behind.
+ */
+const ADDRESS_NOTES: Record<string, string> = {
+  loopback: 'The test is being served to the same machine that is running it.',
+  lan:
+    'A LAN address, seen directly from the connection. If a router between you and the server ' +
+    'translates addresses, this is the last hop before the server rather than the client itself.',
+  cgnat:
+    'A shared-address range, used by carrier-grade NAT and by Tailscale. Traffic arriving over a ' +
+    'subnet router is translated on the way, so the original client address is not recoverable.',
+  'link-local': 'A link-local address, assigned without a DHCP server.',
+  public: 'A public address, so this connection reached the server from outside the LAN.',
 };
 
 const PHASE_LABELS: Record<string, string> = {
@@ -205,7 +211,7 @@ function render(results: Results, final = false): void {
 
   renderScores(results, final);
   maybeNotePrecision(summary);
-  renderDetail(results);
+  renderDetail(ui.detailBody, samplesOf(results));
 }
 
 /**
@@ -220,237 +226,23 @@ function renderTraces(results: Results, summary: MeasurementSummary): void {
   drawTrace('upload', ui.uploadChart, results.getUploadBandwidthPoints(), summary.upload);
 }
 
-function drawTrace(
-  key: 'download' | 'upload',
-  host: HTMLElement,
-  raw: readonly BandwidthPoint[],
-  reported: number | undefined,
-): void {
-  const state = traces[key];
-  // Filtered here rather than inside the renderer, so the positions it hands
-  // back stay index-aligned with the samples the tooltip reads.
-  const points = raw.filter((p) => Number.isFinite(p.bps) && p.bps >= 0);
-
-  const chart = renderAreaChart(
-    points.map((p) => p.bps),
-    {
-      colour: state.colour,
-      id: `grad-${key}`,
-      ...(reported !== undefined ? { marker: { value: reported, label: '90th percentile' } } : {}),
-    },
-  );
-
-  host.innerHTML = chart.html;
-  state.positions = chart.positions;
-  state.points = points;
-}
-
 /**
- * Hover on a trace: a guide line, a dot on the curve, and what that sample
- * actually was.
+ * The engine's results as plain data.
  *
- * The engine records far more per sample than the headline uses — the payload
- * size, the round trip, how long the request took — and a single point on the
- * curve is where that detail belongs.
+ * This is both what the detail panel draws from and what a completed run is
+ * stored as, so the permalink renders exactly the same page from exactly the
+ * same numbers rather than an approximation of them.
  */
-function attachTraceHover(key: 'download' | 'upload', host: HTMLElement): void {
-  host.addEventListener('pointermove', (event) => showTraceTip(key, host, event));
-  host.addEventListener('pointerleave', () => {
-    for (const node of host.querySelectorAll<HTMLElement>('.trace__cursor, .trace__tip')) {
-      node.hidden = true;
-    }
-  });
-}
-
-function showTraceTip(key: 'download' | 'upload', host: HTMLElement, event: PointerEvent): void {
-  const state = traces[key];
-  const plot = host.querySelector<HTMLElement>('.trace__plot');
-  const cursor = host.querySelector<HTMLElement>('.trace__cursor');
-  const tip = host.querySelector<HTMLElement>('.trace__tip');
-  if (!plot || !cursor || !tip || state.positions.length === 0) return;
-
-  const box = plot.getBoundingClientRect();
-  if (box.width === 0) return;
-  const fraction = (event.clientX - box.left) / box.width;
-
-  let nearest = 0;
-  let best = Infinity;
-  state.positions.forEach((p, i) => {
-    const distance = Math.abs(p.xPct / 100 - fraction);
-    if (distance < best) {
-      best = distance;
-      nearest = i;
-    }
-  });
-
-  const position = state.positions[nearest]!;
-  const point = state.points[nearest];
-  if (!point) return;
-
-  const line = cursor.querySelector<HTMLElement>('.trace__cursor-line');
-  const dot = cursor.querySelector<HTMLElement>('.trace__cursor-dot');
-  if (line) line.style.left = `${position.xPct}%`;
-  if (dot) {
-    dot.style.left = `${position.xPct}%`;
-    dot.style.top = `${position.yPct}%`;
-  }
-  cursor.hidden = false;
-
-  tip.innerHTML = traceTipMarkup(state, point);
-  tip.hidden = false;
-  placeTip(tip, plot, (position.xPct / 100) * box.width, (position.yPct / 100) * box.height);
-}
-
-function tipRow(key: string, value: string): string {
-  return `<div><span class="tip__key">${key}:</span> <span class="tip__value">${value}</span></div>`;
-}
-
-function traceTipMarkup(state: TraceState, point: BandwidthPoint): string {
-  const speed = formatBandwidth(point.bps);
-  const rows = [tipRow('Speed', `${speed.value} ${speed.unit}`)];
-  if (Number.isFinite(point.bytes) && point.bytes > 0) {
-    rows.push(tipRow('Payload', formatPayload(point.bytes)));
-  }
-  if (Number.isFinite(point.ping) && point.ping > 0) {
-    rows.push(tipRow('Round trip', `${point.ping.toFixed(2)} ms`));
-  }
-  if (Number.isFinite(point.duration) && point.duration > 0) {
-    rows.push(tipRow('Request took', `${point.duration.toFixed(0)} ms`));
-  }
-  return (
-    `<div class="tip__head" style="--swatch: ${state.colour}">` +
-    `<span class="tip__swatch"></span>${state.label}</div>${rows.join('')}`
-  );
-}
-
-/**
- * Places a tooltip near a point without letting it escape its container.
- *
- * Measured after the content is set, because its size depends on the text.
- * Prefers to sit above the thing it describes and flips below when there is
- * no room — otherwise it clamps to the top edge and covers the controls.
- */
-function placeTip(
-  tip: HTMLElement,
-  within: HTMLElement,
-  x: number,
-  y: number,
-  anchorHeight = 0,
-): void {
-  tip.style.left = '0px';
-  tip.style.top = '0px';
-
-  const maxX = Math.max(0, within.clientWidth - tip.offsetWidth);
-  const maxY = Math.max(0, within.clientHeight - tip.offsetHeight);
-  const above = y - tip.offsetHeight - 10;
-
-  tip.style.left = `${Math.max(0, Math.min(maxX, x + 12))}px`;
-  tip.style.top = `${Math.max(0, Math.min(maxY, above >= 0 ? above : y + anchorHeight + 10))}px`;
-}
-
-/** Formats bits per second for an axis or tooltip. */
-function bps(value: number): string {
-  const f = formatBandwidth(value);
-  return `${f.value} ${f.unit}`;
-}
-
-function ms(value: number): string {
-  return `${value.toFixed(2)} ms`;
-}
-
-/**
- * The per-measurement distributions.
- *
- * The headline figures are single percentiles, which say nothing about how
- * consistent a run was — and consistency is exactly what exposes a failing
- * cable or a duplex mismatch. These show every sample the engine collected.
- */
-/**
- * The width the box plots should be drawn at, in CSS pixels.
- *
- * A collapsed `<details>` reports zero, so fall back rather than emitting a
- * drawing of width zero.
- */
-function detailWidth(): number {
-  const style = getComputedStyle(ui.detailBody);
-  const inner =
-    ui.detailBody.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
-  return Number.isFinite(inner) && inner > 0 ? inner : 760;
-}
-
-function renderDetail(results: Results): void {
-  const groups: Array<{ title: string; rows: Distribution[]; format: (v: number) => string }> = [];
-  let packetLossBar = '';
-
-  const download = bandwidthBySize(results.getDownloadBandwidthPoints(), formatTransferSize);
-  if (download.length > 0) {
-    groups.push({ title: 'Download, by transfer size', rows: download, format: bps });
-  }
-
-  const upload = bandwidthBySize(results.getUploadBandwidthPoints(), formatTransferSize);
-  if (upload.length > 0) {
-    groups.push({ title: 'Upload, by transfer size', rows: upload, format: bps });
-  }
-
-  const latencyRows: Distribution[] = [];
-  const latencySeries: Array<[string, number[]]> = [
-    ['Idle', results.getUnloadedLatencyPoints()],
-    ['Loaded ↓', results.getDownLoadedLatencyPoints()],
-    ['Loaded ↑', results.getUpLoadedLatencyPoints()],
-  ];
-  for (const [label, points] of latencySeries) {
-    const summary = summarise(points);
-    if (summary) {
-      latencyRows.push({
-        label: `${label} (${summary.count})`,
-        detail: `${summary.count} ping${summary.count === 1 ? '' : 's'}`,
-        summary,
-      });
-    }
-  }
-  // Packet loss as a received/lost bar, which reads at a glance in a way a
-  // percentage does not — and shows the sample size, since 0% of 20 packets
-  // and 0% of 1000 are different claims.
+function samplesOf(results: Results): RunSamples {
   const loss = results.getPacketLoss();
-  if (loss !== undefined && Number.isFinite(loss)) {
-    const received = Math.max(0, Math.min(1, 1 - loss));
-    packetLossBar = `<div class="box__group">
-      <h3 class="box__group-title">Packet loss</h3>
-      <div class="loss-bar">
-        <div class="loss-bar__received" style="width: ${(received * 100).toFixed(2)}%">
-          ${received >= 0.08 ? `Received ${(received * 100).toFixed(received === 1 ? 0 : 1)}%` : ''}
-        </div>
-      </div>
-    </div>`;
-  }
-
-  if (latencyRows.length > 0) {
-    // Not zero-based: on a LAN every value sits near zero, and forcing the
-    // axis to the origin would flatten the whole distribution into a smear.
-    groups.push({ title: 'Latency', rows: latencyRows, format: ms });
-  }
-
-  if (groups.length === 0 && packetLossBar === '') {
-    ui.detailBody.innerHTML = '<p class="note">No samples collected yet.</p>';
-    return;
-  }
-
-  const width = detailWidth();
-  ui.detailBody.innerHTML =
-    groups
-      .map(
-        (g) => `<div class="box__group">
-          <h3 class="box__group-title">${g.title}</h3>
-          ${renderBoxPlots(g.rows, {
-            format: g.format,
-            zeroBased: g.format === bps,
-            width,
-          })}
-        </div>`,
-      )
-      .join('') +
-    packetLossBar +
-    BOXPLOT_LEGEND;
+  return {
+    download: results.getDownloadBandwidthPoints() as unknown as RunSamples['download'],
+    upload: results.getUploadBandwidthPoints() as unknown as RunSamples['upload'],
+    idleLatency: results.getUnloadedLatencyPoints(),
+    downLoadedLatency: results.getDownLoadedLatencyPoints(),
+    upLoadedLatency: results.getUpLoadedLatencyPoints(),
+    ...(loss !== undefined && Number.isFinite(loss) ? { packetLoss: loss } : {}),
+  };
 }
 
 /* --- the step strip ------------------------------------------------------ */
@@ -772,6 +564,7 @@ function maybeNotePrecision(summary: MeasurementSummary): void {
 async function run(): Promise<void> {
   clearError();
   ui.restart.disabled = true;
+  ui.permalink.hidden = true;
   hideStepTip();
   stages = [];
   stageOutcome.clear();
@@ -797,7 +590,8 @@ async function run(): Promise<void> {
   // Stands in for the server-location map on speed.cloudflare.com. That needs
   // external tiles, which would leave the LAN — the one thing this must not
   // do — and on a LAN the useful half is knowing which machine you are on.
-  ui.connection.textContent = `client: ${status.clientIp}`;
+  ui.connection.textContent = `client: ${status.clientIp} (${status.clientKindLabel})`;
+  ui.connection.title = ADDRESS_NOTES[status.clientKind] ?? '';
 
   const config: EngineConfig = profile.engineConfig;
   // Fails loudly rather than letting a bad deploy phone home. See api.ts.
@@ -861,8 +655,12 @@ async function run(): Promise<void> {
         summary: results.getSummary() as unknown as Record<string, unknown>,
         scores,
         profile: profile.profile,
-      }).then((stored) => {
-        document.body.dataset.resultStored = stored ? 'yes' : 'no';
+        // Stored so the run can be reopened and redrawn, rather than reduced
+        // to the headline the moment you navigate away from it.
+        points: samplesOf(results) as unknown as Record<string, unknown>,
+      }).then((id) => {
+        document.body.dataset.resultStored = id === undefined ? 'no' : 'yes';
+        if (id !== undefined) showPermalink(id);
       });
     }
   };
@@ -944,7 +742,7 @@ let resizeTimer: ReturnType<typeof setTimeout> | undefined;
 window.addEventListener('resize', () => {
   if (resizeTimer !== undefined) clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => {
-    if (lastResults) renderDetail(lastResults);
+    if (lastResults) renderDetail(ui.detailBody, samplesOf(lastResults));
   }, 120);
 });
 
@@ -969,6 +767,17 @@ ui.profileSelect.addEventListener('change', () => {
 
 attachTraceHover('download', ui.downloadChart);
 attachTraceHover('upload', ui.uploadChart);
+
+/**
+ * Reveals the link back to this run.
+ *
+ * Shown only once the run is stored, because a link to a result that was never
+ * written is worse than no link at all.
+ */
+function showPermalink(id: number): void {
+  ui.permalink.href = `/result.html?id=${id}`;
+  ui.permalink.hidden = false;
+}
 
 function start(): Promise<void> {
   return run().catch((e: unknown) => {

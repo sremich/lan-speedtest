@@ -13,12 +13,12 @@
 //!    before the request body is fully drained, upload figures become
 //!    fiction. `up()` therefore reads the body to completion first.
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use axum::body::Body;
-use axum::extract::{ConnectInfo, FromRequestParts, Query, State};
+use axum::extract::{ConnectInfo, FromRequestParts, Path, Query, State};
 use axum::http::request::Parts;
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -29,6 +29,7 @@ use tower_http::services::{ServeDir, ServeFile};
 
 use crate::config::{Config, Measurement};
 use crate::history::{self, History, HistoryError, ResultSubmission};
+use crate::netid::{self, Cidr};
 use crate::payload::PayloadSource;
 
 /// The engine's parser requires this exact metric name (case-insensitive).
@@ -46,6 +47,75 @@ pub struct AppState {
     /// Absent when history is disabled, which is how the contract tests and the
     /// e2e suite run.
     pub history: Option<Arc<History>>,
+    /// Proxies whose `X-Forwarded-For` may be believed, parsed once at
+    /// startup. Config validation has already proved these parse.
+    pub trusted_proxies: Arc<Vec<Cidr>>,
+    /// Reverse-lookup settings, absent when the feature is off.
+    pub reverse_dns: Option<Arc<ReverseDns>>,
+}
+
+/// Everything a reverse lookup needs, resolved from config once.
+#[derive(Debug)]
+pub struct ReverseDns {
+    /// Only addresses inside one of these are ever looked up.
+    pub ranges: Vec<Cidr>,
+    /// Explicit resolver, or `None` to read `/etc/resolv.conf` at lookup time.
+    pub resolver: Option<SocketAddr>,
+    pub timeout: Duration,
+    pub ttl: Duration,
+}
+
+impl ReverseDns {
+    /// The resolver to ask, preferring the configured one.
+    ///
+    /// `/etc/resolv.conf` is read per lookup rather than cached: in a
+    /// container it can be rewritten underneath us, and a stale resolver fails
+    /// silently.
+    pub fn resolver(&self) -> Option<SocketAddr> {
+        if let Some(explicit) = self.resolver {
+            return Some(explicit);
+        }
+        let contents = std::fs::read_to_string("/etc/resolv.conf").ok()?;
+        netid::resolver_from_resolv_conf(&contents)
+    }
+
+    pub fn covers(&self, ip: IpAddr) -> bool {
+        self.ranges.iter().any(|c| c.contains(ip))
+    }
+}
+
+impl AppState {
+    /// Derives the parsed forms config validation has already checked.
+    pub fn new(config: Config, payload: PayloadSource, history: Option<Arc<History>>) -> Self {
+        let trusted = config
+            .server
+            .trusted_proxies
+            .iter()
+            .filter_map(|raw| Cidr::parse(raw).ok())
+            .collect::<Vec<_>>();
+
+        let rdns = config.server.reverse_dns.clone();
+        let reverse_dns = rdns.enabled.then(|| {
+            Arc::new(ReverseDns {
+                ranges: rdns
+                    .ranges
+                    .iter()
+                    .filter_map(|r| Cidr::parse(r).ok())
+                    .collect(),
+                resolver: rdns.resolver.parse().ok(),
+                timeout: Duration::from_millis(rdns.timeout_ms),
+                ttl: Duration::from_secs(rdns.ttl_secs),
+            })
+        });
+
+        Self {
+            payload,
+            config: Arc::new(config),
+            history,
+            trusted_proxies: Arc::new(trusted),
+            reverse_dns,
+        }
+    }
 }
 
 /// Query string of a measurement request.
@@ -105,28 +175,46 @@ pub fn router(state: AppState) -> Router {
         .route("/api/profiles", get(profiles))
         .route("/api/health", get(|| async { "ok" }))
         .route("/api/results", post(record_result))
+        .route("/api/results/{id}", get(get_result))
         .route("/api/history", get(list_history))
         .route("/api/clients", get(list_clients))
+        .route("/api/clients/{ip}/name", post(set_client_name))
         .fallback_service(statics)
         .with_state(state)
 }
 
-/// The client's address, or `None` when the server was started without
-/// connect info (which is how the backend-only tests run).
+/// The connection's peer address and any forwarding header, or `None` when the
+/// server was started without connect info (which is how the backend-only
+/// tests run).
 ///
-/// Taken from the connection, never from a header. `X-Forwarded-For` is
-/// trivially spoofable and there is no proxy in front of this service anyway,
-/// so trusting it would let any client attribute a run to any address it liked.
+/// The header is captured but **not** trusted here. `effective` decides
+/// whether to believe it, and only does so when the peer is one of the
+/// configured trusted proxies — otherwise anyone on the LAN could attribute a
+/// run to any address they liked by setting one header.
 ///
 /// Infallible on purpose: a missing peer address should degrade to "unknown"
 /// rather than reject an otherwise valid request.
-#[derive(Debug, Clone, Copy)]
-pub struct ClientAddr(pub Option<SocketAddr>);
+#[derive(Debug, Clone)]
+pub struct ClientAddr {
+    pub peer: Option<SocketAddr>,
+    pub forwarded_for: Option<String>,
+}
 
 impl ClientAddr {
-    pub fn ip(&self) -> String {
-        self.0
-            .map(|a| a.ip().to_string())
+    /// The address to attribute this request to.
+    pub fn effective(&self, state: &AppState) -> Option<IpAddr> {
+        self.peer.map(|peer| {
+            netid::effective_client(
+                peer.ip(),
+                self.forwarded_for.as_deref(),
+                &state.trusted_proxies,
+            )
+        })
+    }
+
+    pub fn ip(&self, state: &AppState) -> String {
+        self.effective(state)
+            .map(|a| a.to_string())
             .unwrap_or_else(|| "unknown".to_string())
     }
 }
@@ -135,12 +223,18 @@ impl<S: Send + Sync> FromRequestParts<S> for ClientAddr {
     type Rejection = std::convert::Infallible;
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        Ok(ClientAddr(
-            parts
+        let forwarded_for = parts
+            .headers
+            .get("x-forwarded-for")
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.chars().take(400).collect());
+        Ok(ClientAddr {
+            forwarded_for,
+            peer: parts
                 .extensions
                 .get::<ConnectInfo<SocketAddr>>()
                 .map(|ConnectInfo(addr)| *addr),
-        ))
+        })
     }
 }
 
@@ -202,17 +296,108 @@ async fn record_result(
     };
 
     let recorded_at = history::now_rfc3339();
-    match history.record(
-        &submission,
-        &client.ip(),
-        &user_agent(&headers),
-        &recorded_at,
-    ) {
+    let client_ip = client.ip(&state);
+    let result = history.record(&submission, &client_ip, &user_agent(&headers), &recorded_at);
+
+    // Naming the client happens off the response path. A resolver that is slow
+    // or absent must not delay the POST that ends a test run.
+    if result.is_ok() {
+        if let Some(ip) = client.effective(&state) {
+            maybe_resolve_name(&state, ip);
+        }
+    }
+
+    match result {
         Ok(id) => (
             StatusCode::CREATED,
             axum::Json(Recorded { id, recorded_at }),
         )
             .into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+/// Looks up what a client is called, if that is switched on and due.
+///
+/// Deliberately fire-and-forget: the name is a label on a history row, and
+/// nothing about a completed measurement should depend on DNS.
+fn maybe_resolve_name(state: &AppState, ip: IpAddr) {
+    let (Some(rdns), Some(history)) = (state.reverse_dns.clone(), state.history.clone()) else {
+        return;
+    };
+    if !rdns.covers(ip) {
+        return;
+    }
+
+    let key = ip.to_string();
+
+    // A remembered answer — including a remembered miss — stands until its TTL
+    // expires. Without this, a client with no PTR record is looked up again
+    // after every single run.
+    if let Ok(Some((_, resolved_at))) = history.resolved_name(&key) {
+        if let Some(age) = history::age_since(&resolved_at) {
+            if age < rdns.ttl {
+                return;
+            }
+        }
+    }
+
+    tokio::spawn(async move {
+        let Some(resolver) = rdns.resolver() else {
+            tracing::debug!("reverse dns: no resolver available");
+            return;
+        };
+        let found = netid::reverse_lookup(resolver, ip, rdns.timeout)
+            .await
+            .unwrap_or_default();
+        let at = history::now_rfc3339();
+        if let Err(e) = history.record_resolved_name(&ip.to_string(), &found, &at) {
+            tracing::debug!("reverse dns: could not store name: {e}");
+        }
+    });
+}
+
+/// `GET /api/results/{id}` — one run in full, for a permalink.
+async fn get_result(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
+    let Some(history) = state.history.as_ref() else {
+        return (StatusCode::NOT_FOUND, "history is disabled").into_response();
+    };
+    match history.by_id(id) {
+        Ok(Some(run)) => axum::Json(run).into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, "no such run").into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct NameBody {
+    #[serde(default)]
+    name: String,
+}
+
+/// `POST /api/clients/{ip}/name` — name a client, or clear the name.
+///
+/// Unauthenticated, like everything else here: this is a LAN tool with no
+/// accounts, and the same is already true of submitting a result. The value is
+/// length-capped and stored as text, never interpreted.
+async fn set_client_name(
+    State(state): State<AppState>,
+    Path(ip): Path<String>,
+    axum::Json(body): axum::Json<NameBody>,
+) -> Response {
+    let Some(history) = state.history.as_ref() else {
+        return (StatusCode::NOT_FOUND, "history is disabled").into_response();
+    };
+
+    // The path segment must be an address. Anything else is a client bug, and
+    // accepting it would let history accumulate rows keyed by nonsense.
+    if ip.parse::<IpAddr>().is_err() {
+        return (StatusCode::BAD_REQUEST, "not an IP address").into_response();
+    }
+
+    let name: String = body.name.trim().chars().take(60).collect();
+    match history.set_client_name(&ip, &name) {
+        Ok(()) => (StatusCode::NO_CONTENT, ()).into_response(),
         Err(e) => e.into_response(),
     }
 }
@@ -238,7 +423,7 @@ async fn list_history(
         return axum::Json(Vec::<()>::new()).into_response();
     };
 
-    let me = client.ip();
+    let me = client.ip(&state);
     let filter = match q.client.as_deref() {
         None | Some("") | Some("all") => None,
         Some("mine") => Some(me.as_str()),
@@ -379,17 +564,31 @@ struct Status {
     /// the one thing this project must not do. Knowing which machine you are
     /// testing from is the genuinely useful half of that panel anyway.
     client_ip: String,
+    /// What kind of address that is: `lan`, `cgnat`, `public`, …
+    ///
+    /// A `10.x` address that arrived through a Tailscale subnet router is
+    /// indistinguishable from a LAN client — the router rewrote the source
+    /// before the packet reached us. Saying which kind it is, is the honest
+    /// amount of certainty available.
+    client_kind: &'static str,
+    client_kind_label: &'static str,
     server_profile_description: String,
 }
 
 async fn status(State(state): State<AppState>, client: ClientAddr) -> impl IntoResponse {
+    let ip = client.effective(&state);
+    let kind = ip.map(netid::classify);
     axum::Json(Status {
         site_name: state.config.server.site_name.clone(),
         version: VERSION,
         git_sha: GIT_SHA,
         profile: state.config.profile.clone(),
         history_enabled: state.history.is_some(),
-        client_ip: client.ip(),
+        client_ip: ip
+            .map(|a| a.to_string())
+            .unwrap_or_else(|| "unknown".into()),
+        client_kind: kind.map(netid::Kind::slug).unwrap_or("unknown"),
+        client_kind_label: kind.map(netid::Kind::label).unwrap_or("unknown"),
         server_profile_description: state.config.active_profile().description.clone(),
     })
 }

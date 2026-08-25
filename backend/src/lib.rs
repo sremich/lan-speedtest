@@ -9,6 +9,7 @@
 
 pub mod config;
 pub mod history;
+pub mod netid;
 pub mod payload;
 pub mod routes;
 

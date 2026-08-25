@@ -32,7 +32,6 @@
 //! SPEEDTEST_THROUGHPUT_BYTES        default 67108864 (64 MiB per stream)
 //! ```
 
-use std::sync::Arc;
 use std::time::Instant;
 
 use futures_util::StreamExt;
@@ -57,11 +56,8 @@ fn env_or<T: std::str::FromStr>(key: &str, default: T) -> T {
 
 async fn serve() -> String {
     let config: Config = toml::from_str(CONFIG).unwrap();
-    let state = AppState {
-        payload: PayloadSource::new(config.server.download_chunk_bytes),
-        config: Arc::new(config),
-        history: None,
-    };
+    let payload = PayloadSource::new(config.server.download_chunk_bytes);
+    let state = AppState::new(config, payload, None);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {

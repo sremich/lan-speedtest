@@ -248,6 +248,12 @@ fn deploy_env(cfg: &Config, secrets: Option<&Secrets>, listen_ip: &str) -> Strin
     if let Some(name) = &cfg.guest.site_name {
         lines.push(format!("SPEEDTEST_SITE_NAME={}", name.trim()));
     }
+    if cfg.guest.reverse_dns {
+        lines.push("SPEEDTEST_REVERSE_DNS=1".to_string());
+        if let Some(resolver) = &cfg.guest.dns_resolver {
+            lines.push(format!("SPEEDTEST_DNS_RESOLVER={}", resolver.trim()));
+        }
+    }
     match secrets {
         Some(s) => {
             // TLS is configured only alongside the certificate we just issued.
@@ -281,5 +287,77 @@ async fn wait_until_responsive(pve: &Proxmox<'_>, vmid: u32) -> anyhow::Result<(
 async fn report_address(pve: &Proxmox<'_>, vmid: u32) {
     if let Ok(Some(ip)) = pve.guest_ipv4(vmid).await {
         tracing::info!("guest is reachable at https://{ip}/ (and at its DNS name)");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The shipped `provision.toml`, which is also what gets deployed.
+    fn shipped() -> Config {
+        Config::load(std::path::Path::new("provision.toml"))
+            .expect("provision.toml parses and validates from the crate directory")
+    }
+
+    #[test]
+    fn the_deploy_env_carries_the_reverse_dns_switch_only_when_asked() {
+        let mut cfg = shipped();
+
+        cfg.guest.reverse_dns = false;
+        cfg.guest.dns_resolver = None;
+        let off = deploy_env(&cfg, None, "10.0.0.1");
+        assert!(
+            !off.contains("SPEEDTEST_REVERSE_DNS"),
+            "the key is omitted rather than set to a falsey string, so the \
+             shipped config's own default stays in charge"
+        );
+
+        cfg.guest.reverse_dns = true;
+        let on = deploy_env(&cfg, None, "10.0.0.1");
+        assert!(on.lines().any(|l| l == "SPEEDTEST_REVERSE_DNS=1"));
+        assert!(
+            !on.contains("SPEEDTEST_DNS_RESOLVER"),
+            "an unset resolver must not become an empty one — the service \
+             reads /etc/resolv.conf in that case"
+        );
+
+        cfg.guest.dns_resolver = Some("  10.0.0.53:53  ".into());
+        let explicit = deploy_env(&cfg, None, "10.0.0.1");
+        assert!(explicit
+            .lines()
+            .any(|l| l == "SPEEDTEST_DNS_RESOLVER=10.0.0.53:53"));
+    }
+
+    #[test]
+    fn the_deploy_env_is_one_key_per_line_with_no_quoting() {
+        // Compose reads this file itself and does no unquoting whatsoever, so
+        // a value containing a newline would inject an unrelated variable.
+        // Asserted against the real thing rather than against an escaped
+        // string, because the property is what compose will make of it.
+        let cfg = shipped();
+        let body = deploy_env(&cfg, None, "10.0.0.1");
+        for line in body.lines().filter(|l| !l.starts_with('#')) {
+            let (key, _) = line
+                .split_once('=')
+                .unwrap_or_else(|| panic!("line {line:?} is not KEY=VALUE"));
+            assert!(
+                key.chars().all(|c| c.is_ascii_uppercase() || c == '_'),
+                "key {key:?} is not a plain environment variable name"
+            );
+        }
+    }
+
+    #[test]
+    fn turn_credentials_appear_only_alongside_a_certificate() {
+        // Without secrets the relay is switched off rather than half
+        // configured: with a uri but no credentials the engine falls back to
+        // fetching them from Cloudflare, which is the one thing this project
+        // exists to prevent.
+        let cfg = shipped();
+        let body = deploy_env(&cfg, None, "10.0.0.1");
+        assert!(body.contains("SPEEDTEST_TURN_ENABLED=false"));
+        assert!(!body.contains("SPEEDTEST_TURN_URI"));
+        assert!(!body.contains("SPEEDTEST_TURN_PASS"));
     }
 }

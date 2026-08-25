@@ -5,7 +5,6 @@
 //! If one of these fails, the engine will produce wrong numbers rather than
 //! an error, which is the failure mode worth guarding hardest against.
 
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use lan_speedtest::{router, AppState, Config, PayloadSource};
@@ -28,11 +27,8 @@ measurements = [
 /// Boots the real router on an ephemeral port and returns its base URL.
 async fn serve(config_toml: &str) -> String {
     let config: Config = toml::from_str(config_toml).expect("test config parses");
-    let state = AppState {
-        payload: PayloadSource::new(config.server.download_chunk_bytes),
-        config: Arc::new(config),
-        history: None,
-    };
+    let payload = PayloadSource::new(config.server.download_chunk_bytes);
+    let state = AppState::new(config, payload, None);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

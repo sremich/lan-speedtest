@@ -18,6 +18,17 @@ export interface Status {
   historyEnabled: boolean;
   /** The requesting client, as seen from the connection. */
   clientIp: string;
+  /**
+   * What sort of address that is: `private`, `cgnat`, `public`, `loopback` or
+   * `linkLocal`.
+   *
+   * Worth saying out loud, because "why is it always 10.x?" has a different
+   * answer depending on which of these it is — and the honest answer to some
+   * of them is that the real address cannot be recovered. See
+   * `docs/wiki/Client-Identity.md`.
+   */
+  clientKind: string;
+  clientKindLabel: string;
   serverProfileDescription: string;
 }
 
@@ -139,12 +150,60 @@ export async function submitResult(payload: {
   summary: Record<string, unknown>;
   scores: Record<string, string>;
   profile: string;
-}): Promise<boolean> {
+  /** Every sample, so the stored run can be redrawn rather than summarised. */
+  points: Record<string, unknown>;
+}): Promise<number | undefined> {
   try {
     const res = await fetch('/api/results', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload),
+    });
+    if (!res.ok) return undefined;
+    const created = (await res.json()) as { id?: number };
+    return typeof created.id === 'number' ? created.id : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** A stored run, in full. */
+export interface StoredRunDetail {
+  id: number;
+  recordedAt: string;
+  clientIp: string;
+  clientName: string | null;
+  hostname: string | null;
+  userAgent: string;
+  profile: string;
+  download: number | null;
+  upload: number | null;
+  latency: number | null;
+  jitter: number | null;
+  downLoadedLatency: number | null;
+  upLoadedLatency: number | null;
+  packetLoss: number | null;
+  totalDurationMs: number | null;
+  scores: Record<string, string>;
+  summary: Record<string, number | undefined>;
+  points: Record<string, unknown>;
+}
+
+export const fetchResult = (id: number): Promise<StoredRunDetail> =>
+  getJson<StoredRunDetail>(`/api/results/${encodeURIComponent(String(id))}`);
+
+/**
+ * Names a client, or clears the name when given an empty string.
+ *
+ * Best-effort in the same way results are: failing to rename a row is not a
+ * reason to fail the page it is on.
+ */
+export async function setClientName(ip: string, name: string): Promise<boolean> {
+  try {
+    const res = await fetch(`/api/clients/${encodeURIComponent(ip)}/name`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name }),
     });
     return res.ok;
   } catch {

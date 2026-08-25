@@ -16,6 +16,9 @@
           <select class="select" id="client-filter" data-testid="client-filter" aria-label="Filter by client">
             <option value="all">All clients</option>
           </select>
+          <button class="btn" id="rename" data-testid="rename" type="button" hidden>
+            Rename client
+          </button>
           <a class="btn" href="/">Run a test</a>
         </div>
       </header>
@@ -41,6 +44,7 @@
               <th scope="col" class="cell--num">Loss</th>
               <th scope="col">Suitability</th>
               <th scope="col">Profile</th>
+              <th scope="col"><span class="visually-hidden">Result</span></th>
             </tr>
           </thead>
           <tbody id="rows" data-testid="rows"></tbody>
