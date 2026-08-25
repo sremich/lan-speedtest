@@ -82,7 +82,45 @@ curl -s -o /dev/null -w '%{speed_download} bytes/s\n' \
 
 ## Packet loss shows nothing, or the run errors with an ICE timeout
 
-In order of likelihood:
+**Check first: is coturn actually reading its configuration?** This is the one
+that has bitten in practice, and its symptoms point everywhere except at the
+cause.
+
+```sh
+journalctl -u coturn | grep -E "Cannot find config|EXPLICIT LISTENER|Default realm"
+```
+
+`Cannot find config file` or `NO EXPLICIT LISTENER ADDRESS(ES) ARE CONFIGURED`
+means coturn could not read its config and is running on **defaults** — no
+realm, no credentials, no relay range. It does not fail in that case; it warns
+and carries on, answering STUN and looking healthy while every authenticated
+allocation from a browser fails with nothing but an ICE timeout to show for it.
+
+The usual cause is file permissions: coturn drops privileges to its own user, so
+a `root:root 0600` config is unreadable to it. It should be
+`root:<coturn user> 0640`:
+
+```sh
+stat -c '%U:%G %a' /etc/turnserver.conf     # expect root:turnserver 640
+systemctl show coturn -p User --value       # the user it drops to
+```
+
+A healthy start names your own values back to you:
+
+```
+Listener address to use: <your LAN address>
+Default realm: <your realm>
+```
+
+### A warning about `turnutils_uclient`
+
+It is the obvious tool to reach for, and it will happily report 0% loss against
+a relay whose configuration is being ignored — a default coturn permits
+anonymous allocations. It proves the daemon is alive, not that your credentials
+or realm work. Only a client that authenticates against the configured realm
+tests what a browser actually does.
+
+Then, in order of likelihood:
 
 1. **No relay configured.** With TURN disabled the stage is stripped from the
    profile deliberately. Check `/api/profile` for `"packetLossEnabled": true`.
