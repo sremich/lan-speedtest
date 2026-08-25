@@ -63,10 +63,14 @@ ENV APP_VERSION=${VERSION} \
 
 # ca-certificates is not needed: this service makes no outbound requests.
 # curl is for the health check; libcap2-bin provides setcap, used below.
+# The group id is pinned to match the user id: `useradd --uid` alone lets the
+# distribution pick any free gid, which then silently defeats group-readable
+# bind mounts such as the TLS certificate.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl libcap2-bin \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --system --uid 10001 --no-create-home speedtest
+    && groupadd --system --gid 10001 speedtest \
+    && useradd --system --uid 10001 --gid 10001 --no-create-home speedtest
 
 WORKDIR /app
 COPY --from=backend /build/backend/target/release/lan-speedtest /usr/local/bin/lan-speedtest

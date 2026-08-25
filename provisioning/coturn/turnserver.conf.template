@@ -72,8 +72,14 @@ total-quota=100
 max-bps=0
 
 # --- logging -----------------------------------------------------------------
-log-file=/var/log/turnserver.log
+# To journald, via stdout, because that is where systemd puts it and where an
+# operator will look. Writing to a file under /var/log does not work: coturn
+# drops privileges to the `turnserver` user, which cannot create a file there,
+# and combined with `no-stdout-log` that leaves the relay logging *nowhere* —
+# discovered only when trying to debug a packet-loss failure.
+#   journalctl -u coturn -f
+log-file=stdout
 simple-log
 # Verbose logging costs measurable CPU during a burst of 1000 small packets,
 # which is exactly when accuracy matters. Turn it on only while debugging.
-no-stdout-log
+# verbose

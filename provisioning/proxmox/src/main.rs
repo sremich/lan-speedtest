@@ -173,6 +173,7 @@ async fn apply(
     }
 
     setup::install_base(pve, vmid).await?;
+    setup::install_ssh_key(pve, vmid, &expand_home(&cfg.guest.ssh_authorized_key)).await?;
     setup::install_docker(pve, vmid).await?;
 
     let listen_ip = pve.guest_ipv4(vmid).await?.ok_or_else(|| {
@@ -200,6 +201,10 @@ async fn apply(
         tracing::warn!("--skip-tls: coturn and TLS were not configured");
     }
 
+    if let Some(s) = secrets {
+        setup::registry_login(pve, vmid, s).await?;
+    }
+
     let env_body = deploy_env(cfg, secrets, &listen_ip);
     setup::deploy_app(
         pve,
@@ -217,6 +222,16 @@ async fn apply(
     Ok(())
 }
 
+/// Expands a leading `~` so the config can name a key the ordinary way.
+fn expand_home(path: &str) -> PathBuf {
+    if let Some(rest) = path.strip_prefix("~/") {
+        if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+            return PathBuf::from(home).join(rest);
+        }
+    }
+    PathBuf::from(path)
+}
+
 /// The `.env` written to the guest for compose.
 fn deploy_env(cfg: &Config, secrets: Option<&Secrets>, listen_ip: &str) -> String {
     let mut lines = vec![
@@ -224,6 +239,9 @@ fn deploy_env(cfg: &Config, secrets: Option<&Secrets>, listen_ip: &str) -> Strin
         format!("SPEEDTEST_PROFILE={}", cfg.guest.measurement_profile),
         "SPEEDTEST_BIND=0.0.0.0:8080".to_string(),
         "SPEEDTEST_LOG=info".to_string(),
+        // Explicit rather than relying on the config file's relative default,
+        // so the path in the container is unambiguous against the bind mount.
+        "SPEEDTEST_HISTORY_DB=/app/data/history.db".to_string(),
     ];
     match secrets {
         Some(s) => {

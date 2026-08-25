@@ -5,6 +5,9 @@
 /CLAUDE.md
 /DECISIONS.md
 
+# Real provisioning target: names the hypervisor and the guest address.
+/provisioning/proxmox/provision.toml
+
 # --- Secrets and runtime data ---
 .env
 *.env.local

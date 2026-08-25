@@ -197,17 +197,25 @@ impl<'a> Proxmox<'a> {
                 "--",
                 "bash",
                 "-lc",
-                command,
+                // A fresh Debian container has no locales generated, so
+                // anything invoking perl floods stderr with warnings that
+                // bury the actual error.
+                &format!("export LANG=C.UTF-8 LC_ALL=C.UTF-8; {command}"),
             ]))
             .await
     }
 
     /// Runs a command inside the container, failing if it does.
+    ///
+    /// The command is redacted before it reaches the error, because these
+    /// commands carry credentials as leading environment assignments and an
+    /// error message ends up in logs, terminals and chat transcripts.
     pub async fn exec_checked(&self, vmid: u32, command: &str) -> anyhow::Result<String> {
         let out = self.exec(vmid, command).await?;
         if !out.succeeded() {
             bail!(
-                "in container {vmid}, `{command}` exited {}: {}{}",
+                "in container {vmid}, `{}` exited {}: {}{}",
+                redact_secrets(command),
                 out.status,
                 out.stdout.trim(),
                 out.stderr.trim()
@@ -271,6 +279,74 @@ impl<'a> Proxmox<'a> {
     }
 }
 
+/// Masks credential values in a shell command before it is logged or returned
+/// in an error.
+///
+/// Provisioning passes secrets as leading `NAME='value'` assignments, so a
+/// failure would otherwise print the TURN password or the ACME token verbatim.
+/// This has happened once; the rule is that a secret never reaches an error
+/// string, not that we remember to be careful at each call site.
+pub fn redact_secrets(command: &str) -> String {
+    const SENSITIVE: [&str; 6] = ["PASS", "TOKEN", "SECRET", "CREDENTIAL", "PASSWD", "KEY"];
+
+    let mut out = String::with_capacity(command.len());
+    let mut rest = command;
+
+    while let Some(eq) = rest.find("='") {
+        // The assignment name is the run of NAME-ish characters before '='.
+        let name_start = rest[..eq]
+            .rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let name = &rest[name_start..eq];
+
+        let looks_sensitive = !name.is_empty()
+            && SENSITIVE
+                .iter()
+                .any(|s| name.to_ascii_uppercase().contains(s));
+
+        // Find the end of the single-quoted value.
+        let value_start = eq + 2;
+        let Some(close) = end_of_quoted_value(&rest[value_start..]) else {
+            break;
+        };
+        let value_end = value_start + close + 1;
+
+        if looks_sensitive {
+            out.push_str(&rest[..value_start]);
+            out.push_str("***'");
+        } else {
+            out.push_str(&rest[..value_end]);
+        }
+        rest = &rest[value_end..];
+    }
+
+    out.push_str(rest);
+    out
+}
+
+/// Index of the closing quote of a shell single-quoted value.
+///
+/// `s` starts immediately after the opening quote. A value containing a quote
+/// is written `'aa'\''bb'`, which is still one value — treating the first `'`
+/// as the end would mask only the head and leave the rest of a password in
+/// plain sight.
+fn end_of_quoted_value(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\'' {
+            if s[i..].starts_with("'\\''") {
+                i += 4;
+                continue;
+            }
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
 /// Pulls the first global IPv4 out of `ip -4 -json addr show`.
 pub fn parse_ipv4_from_ip_json(json: &str) -> Option<String> {
     let v: serde_json::Value = serde_json::from_str(json).ok()?;
@@ -316,6 +392,7 @@ mod tests {
             onboot: true,
             extra_tags: vec![],
             measurement_profile: "lan-1g".into(),
+            ssh_authorized_key: "~/.ssh/id_ed25519.pub".into(),
         }
     }
 
@@ -427,5 +504,60 @@ mod tests {
             {"family":"inet","local":"127.0.0.1","prefixlen":8,"scope":"host"}]}]"#;
         assert_eq!(parse_ipv4_from_ip_json(json), None);
         assert_eq!(parse_ipv4_from_ip_json("[]"), None);
+    }
+
+    #[test]
+    fn credentials_never_survive_into_an_error_message() {
+        // Regression test for a real leak: a coturn install failure printed the
+        // TURN password into the terminal, and from there into a chat
+        // transcript. The rule is that a secret cannot reach an error string,
+        // not that we remember to be careful at each call site.
+        let cmd = "TURN_USER='speedtest' TURN_PASS='hunter2' TURN_REALM='example.com' \
+                   LISTEN_IP='10.0.0.50' /opt/speedtest/install-coturn.sh";
+        let safe = redact_secrets(cmd);
+
+        assert!(!safe.contains("hunter2"), "password leaked: {safe}");
+        assert!(safe.contains("TURN_PASS='***'"), "{safe}");
+        // Non-secret context must survive, or the error becomes useless.
+        assert!(safe.contains("TURN_USER='speedtest'"), "{safe}");
+        assert!(safe.contains("LISTEN_IP='10.0.0.50'"), "{safe}");
+        assert!(safe.contains("install-coturn.sh"), "{safe}");
+    }
+
+    #[test]
+    fn every_sensitive_name_shape_is_masked() {
+        for (name, secret) in [
+            ("CF_Token", "cf-abc123"),
+            ("ACME_TOKEN", "tok-xyz"),
+            ("SPEEDTEST_TURN_PASS", "pw-123"),
+            ("MY_SECRET", "s-456"),
+            ("API_KEY", "k-789"),
+            ("DB_PASSWD", "p-000"),
+        ] {
+            let cmd = format!("{name}='{secret}' run.sh");
+            let safe = redact_secrets(&cmd);
+            assert!(!safe.contains(secret), "{name} leaked: {safe}");
+        }
+    }
+
+    #[test]
+    fn redaction_leaves_ordinary_commands_untouched() {
+        for plain in [
+            "apt-get update",
+            "systemctl restart coturn",
+            "curl -fsS http://127.0.0.1:8080/api/health",
+            "LISTEN_IP='10.0.0.1' echo hi",
+        ] {
+            assert_eq!(redact_secrets(plain), plain);
+        }
+    }
+
+    #[test]
+    fn redaction_handles_a_shell_escaped_quote_in_the_value() {
+        // Shell-escaped secrets contain a '\''-style sequence; the masker must
+        // not stop early and spill the remainder of the password.
+        let cmd = r"TURN_PASS='aa'\''bb' next.sh";
+        let safe = redact_secrets(cmd);
+        assert!(!safe.contains("bb"), "leaked the tail of the value: {safe}");
     }
 }

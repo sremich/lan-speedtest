@@ -79,6 +79,13 @@ pub struct Guest {
     /// Which `[profiles.*]` in config/speedtest.toml the deployed service runs.
     #[serde(default = "default_measurement_profile")]
     pub measurement_profile: String,
+    /// Public key installed for root on the guest, so it is reachable by SSH.
+    ///
+    /// Installed on every run rather than only at creation: `pct create` takes
+    /// a key, but a guest that already exists never goes through creation
+    /// again, and access should survive a re-run either way.
+    #[serde(default = "default_authorized_key")]
+    pub ssh_authorized_key: String,
 }
 
 fn default_true() -> bool {
@@ -89,6 +96,9 @@ fn default_features() -> String {
 }
 fn default_measurement_profile() -> String {
     "lan-1g".to_string()
+}
+fn default_authorized_key() -> String {
+    "~/.ssh/id_ed25519.pub".to_string()
 }
 
 impl Guest {
@@ -189,6 +199,7 @@ mod tests {
             onboot: true,
             extra_tags: vec![],
             measurement_profile: default_measurement_profile(),
+            ssh_authorized_key: default_authorized_key(),
         }
     }
 

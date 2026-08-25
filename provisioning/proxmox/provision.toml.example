@@ -5,6 +5,10 @@
 #
 # Usage, in order:
 #
+# Copy this to provision.toml (gitignored) and fill in the placeholders. The
+# real file is not committed: it names the hypervisor and the guest's address,
+# which is internal topology this repository should not carry.
+#
 #   speedtest-provision mac      # print the MAC, change nothing
 #   ... create the DHCP reservation for that MAC ...
 #   speedtest-provision plan     # read-only: what exists, what would change
@@ -30,14 +34,17 @@ hostname = "speed"
 # Check what is actually on the node first:
 #   pveam available --section system | grep debian
 #   pveam download local <filename>
-ostemplate = "local:vztmpl/debian-13-standard_13.0-1_amd64.tar.zst"
+# nfs-nas also carries templates but Proxmox reports that storage inactive
+# even while it is mounted, so provisioning uses local.
+ostemplate = "local:vztmpl/debian-13-standard_13.6-1_amd64.tar.zst"
 
 # The predecessor guest ran on 1 core and 512 MB. That is nowhere near enough
 # for a backend whose entire job is to not be the bottleneck.
 cores = 4
 memory_mb = 4096
 swap_mb = 512
-rootfs = "local-lvm:16"
+# zfs-pve matches what the neighbouring guests use on this cluster.
+rootfs = "zfs-pve:16"
 
 bridge = "vmbr0"
 # vlan_tag = 11

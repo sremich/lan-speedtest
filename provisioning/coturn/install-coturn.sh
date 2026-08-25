@@ -50,9 +50,14 @@ LISTEN_IP="$LISTEN_IP" awk '
     print line }
 ' "$TEMPLATE" > "$tmp"
 
-if grep -q '@@' "$tmp"; then
-  echo "ERROR: unsubstituted placeholders remain:" >&2
-  grep -n '@@' "$tmp" >&2
+# Only effective configuration matters. The template's own header explains the
+# @@PLACEHOLDER@@ convention and would otherwise trip this check on every run.
+# Report line numbers, not content: the rendered file contains the credential.
+unsubstituted=$(grep -vE '^[[:space:]]*(#|$)' "$tmp" | grep -c '@@' || true)
+if [ "$unsubstituted" -gt 0 ]; then
+  echo "ERROR: $unsubstituted setting(s) still contain a placeholder, at line(s):" >&2
+  grep -nE '^[[:space:]]*[^#[:space:]].*@@' "$tmp" | cut -d: -f1 | tr '\n' ' ' >&2
+  echo >&2
   rm -f "$tmp"
   exit 1
 fi
@@ -88,7 +93,20 @@ fi
 
 echo "==> verifying"
 systemctl is-active --quiet coturn || { echo "coturn is not running" >&2; exit 1; }
-ss -lnup | grep -q ":3478" || { echo "nothing is listening on UDP 3478" >&2; exit 1; }
+
+# Bind to the configured address specifically. Listening on *some* address is
+# not the same as listening where clients will look.
+if ! ss -lnup | grep -q "${LISTEN_IP}:3478"; then
+  echo "ERROR: nothing is listening on ${LISTEN_IP}:3478" >&2
+  ss -lnup | grep 3478 | head -3 >&2
+  exit 1
+fi
+
+# Logging that goes nowhere is worse than none, because it is discovered while
+# debugging something else. Prove the relay is actually writing somewhere.
+if ! journalctl -u coturn --since "-2 min" --no-pager 2>/dev/null | grep -q .; then
+  echo "WARNING: coturn has logged nothing to journald — check log-file in the config" >&2
+fi
 
 cat <<SUMMARY
 

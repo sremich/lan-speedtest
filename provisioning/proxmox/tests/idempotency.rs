@@ -207,6 +207,41 @@ async fn renewal_check_passes_when_the_cron_entry_and_certificate_are_both_prese
 }
 
 #[tokio::test]
+async fn a_base64_encoded_reload_hook_is_recognised() {
+    // acme.sh stores the reload command base64-encoded. Grepping the raw
+    // config reported "no hook configured" for a correctly configured hook,
+    // which is a warning that trains you to ignore warnings.
+    let fake = FakeRunner::new(vec![
+        Output::ok(
+            "30 0 * * 0 /root/.acme.sh/acme.sh --cron
+",
+        ),
+        Output::ok(
+            "subject=CN=*.example.com
+notAfter=Nov 23 06:40:53 2026 GMT
+",
+        ),
+        // What the guest returns once the value has been decoded.
+        Output::ok(
+            "cd /opt/speedtest && docker compose up -d --force-recreate app
+",
+        ),
+    ]);
+    let pve = Proxmox::new(&fake, "pve");
+
+    setup::verify_renewal_scheduled(&pve, 11050, "/etc/speedtest/tls")
+        .await
+        .expect("a decoded hook should be accepted");
+
+    // The probe must actually do the decoding rather than grep raw text.
+    assert!(
+        fake.ran_anything_matching("base64 -d"),
+        "the hook check should decode acme.sh's encoding: {:?}",
+        fake.command_lines()
+    );
+}
+
+#[tokio::test]
 async fn a_renewal_that_never_reloads_the_service_is_flagged() {
     // Renewing the certificate but never restarting the service means the old
     // material keeps being served until someone notices — 90 days later.
@@ -308,8 +343,11 @@ async fn the_derived_mac_is_stable_across_runs() {
 // --- the shipped config -----------------------------------------------------
 
 #[test]
-fn the_committed_provision_toml_is_valid_and_carries_no_secrets() {
-    let path = Path::new("provision.toml");
+fn the_committed_provision_example_is_valid_and_carries_no_secrets() {
+    // The real provision.toml is gitignored: it names the hypervisor and the
+    // guest's address. Only the example is committed, and it must still parse
+    // so a placeholder never drifts out of shape.
+    let path = Path::new("provision.toml.example");
     let cfg = Config::load(path).expect("shipped provision.toml should parse and validate");
 
     assert_eq!(cfg.guest.vmid, 11050);
@@ -348,5 +386,127 @@ fn the_committed_provision_toml_is_valid_and_carries_no_secrets() {
     assert!(
         !raw.contains("BEGIN") || !raw.contains("PRIVATE KEY"),
         "provision.toml contains an embedded private key"
+    );
+}
+
+#[tokio::test]
+async fn the_history_volume_is_created_writable_by_the_container_user() {
+    // A bind mount shadows whatever the image created at that path, and Docker
+    // auto-creates a missing host directory as root. The service runs as uid
+    // 10001, so without this it crash-loops on "unable to open database file"
+    // — which is exactly what happened on the first real deploy.
+    let fake = FakeRunner::new(vec![]);
+    let pve = Proxmox::new(&fake, "pve");
+
+    let _ = setup::deploy_app(
+        &pve,
+        11050,
+        std::path::Path::new("docker-compose.yml"),
+        std::path::Path::new("config/speedtest.toml"),
+        "SPEEDTEST_PROFILE=lan-1g",
+    )
+    .await;
+
+    let lines = fake.command_lines().join(
+        "
+",
+    );
+    assert!(
+        lines.contains("/opt/speedtest/data"),
+        "the data directory should be prepared: {lines}"
+    );
+    assert!(
+        lines.contains("-o 10001") && lines.contains("-g 10001"),
+        "the data directory must be owned by the container user: {lines}"
+    );
+    // And it must happen before compose starts, or the first run still fails.
+    let dir_at = lines.find("/opt/speedtest/data").unwrap();
+    let up_at = lines.find("docker compose").unwrap_or(usize::MAX);
+    assert!(
+        dir_at < up_at,
+        "the directory must be prepared first: {lines}"
+    );
+}
+
+#[tokio::test]
+async fn certificate_permissions_are_reapplied_on_every_renewal() {
+    // acme.sh rewrites the certificate files each renewal with its own
+    // ownership. Fixing permissions only at install time would leave the
+    // service unable to read its own certificate roughly ninety days later —
+    // a failure nobody is watching for.
+    let fake = FakeRunner::new(vec![]);
+    let pve = Proxmox::new(&fake, "pve");
+
+    let secrets = setup::Secrets {
+        cf_token: "t".into(),
+        acme_email: "a@example.com".into(),
+        acme_domain: "example.com".into(),
+        turn_user: "u".into(),
+        turn_pass: "p".into(),
+        turn_realm: "example.com".into(),
+        ghcr_user: None,
+        ghcr_token: None,
+    };
+
+    let _ = setup::setup_tls(&pve, 11050, &secrets).await;
+    let lines = fake.command_lines().join(
+        "
+",
+    );
+
+    // The install path sets them...
+    assert!(
+        lines.contains("chmod 640") && lines.contains("chgrp 10001"),
+        "install should make the certificate readable by the service: {lines}"
+    );
+    // ...and the renewal hook re-applies them before restarting.
+    let hook_line = lines
+        .lines()
+        .find(|l| l.contains("--reloadcmd"))
+        .unwrap_or_default();
+    assert!(
+        hook_line.contains("chgrp 10001") && hook_line.contains("chmod 640"),
+        "the renewal hook must re-apply permissions: {hook_line}"
+    );
+    assert!(
+        hook_line.contains("docker compose"),
+        "the renewal hook must also restart the service: {hook_line}"
+    );
+}
+
+#[tokio::test]
+async fn pushed_files_have_windows_line_endings_stripped() {
+    // The repository lives on Windows. A CRLF shell script fails with
+    // "set: pipefail: invalid option name", which says nothing about line
+    // endings and cost real time to diagnose on the first live deploy.
+    let fake = FakeRunner::new(vec![]);
+    let pve = Proxmox::new(&fake, "pve");
+
+    let _ = setup::install_coturn(
+        &pve,
+        11050,
+        std::path::Path::new("provisioning/coturn/turnserver.conf.template"),
+        std::path::Path::new("provisioning/coturn/install-coturn.sh"),
+        "10.0.0.50",
+        &setup::Secrets {
+            cf_token: "t".into(),
+            acme_email: "a@example.com".into(),
+            acme_domain: "example.com".into(),
+            turn_user: "u".into(),
+            turn_pass: "p".into(),
+            turn_realm: "example.com".into(),
+            ghcr_user: None,
+            ghcr_token: None,
+        },
+    )
+    .await;
+
+    let lines = fake.command_lines().join(
+        "
+",
+    );
+    assert!(
+        lines.contains("sed -i 's/") && lines.contains("$//'"),
+        "pushed files should be normalised to LF: {lines}"
     );
 }
