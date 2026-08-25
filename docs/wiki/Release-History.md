@@ -5,6 +5,27 @@ pre-releases; from 1.0.0 they are full releases. The 10 GbE saturation check
 was waived, and "no external traffic" is proven by an end-to-end test on every
 push rather than by a manual packet capture.
 
+## 1.4.0
+
+The run, described and explained.
+
+- **A description per run** — where you were, on what device, what you were
+  testing — editable from the history table and from the run's own page.
+  Per-run rather than per-client: it is exactly what differs between two runs
+  from the same machine. Capped at 280 characters, counted in characters.
+- **A live stage line above the step strip**: a spinner, the stage's name in
+  its own colour, and the payload it is moving. Tied to the engine's running
+  state, so pausing stops it and a finished run hides it.
+- **The distribution tooltip is written in words** — a sentence explaining what
+  the marks mean, then "25th percentile" rather than "p25". Styled rather than
+  a native `title`, which could hold neither the explanation nor the styling.
+  A row is now hovered anywhere along its band, not only on its marks.
+- **The step strip spreads across the width**, bounded by how many chevrons the
+  profile implies, and wraps rather than compressing on a narrow screen.
+- **The "90th percentile" label sat at different heights on the two traces.**
+  It was clamped while the line it labels was not. It is now pinned to the
+  line with a fixed offset, identical on every chart.
+
 ## 1.3.1
 
 The latency figures become true.

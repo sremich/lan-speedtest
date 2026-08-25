@@ -176,6 +176,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/health", get(|| async { "ok" }))
         .route("/api/results", post(record_result))
         .route("/api/results/{id}", get(get_result))
+        .route("/api/results/{id}/note", post(set_note))
         .route("/api/history", get(list_history))
         .route("/api/clients", get(list_clients))
         .route("/api/clients/{ip}/name", post(set_client_name))
@@ -365,6 +366,41 @@ async fn get_result(State(state): State<AppState>, Path(id): Path<i64>) -> Respo
     match history.by_id(id) {
         Ok(Some(run)) => axum::Json(run).into_response(),
         Ok(None) => (StatusCode::NOT_FOUND, "no such run").into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+/// The longest note kept. Long enough for "upstairs landing, laptop on
+/// battery, checking the new AP", short enough that the history stays a table.
+const MAX_NOTE_CHARS: usize = 280;
+
+#[derive(Debug, Deserialize)]
+struct NoteBody {
+    #[serde(default)]
+    note: String,
+}
+
+/// `POST /api/results/{id}/note` — annotate a run, or clear the note.
+///
+/// The note belongs to the run, not the client: it records what was being
+/// tested and from where, which is exactly the thing that differs between two
+/// runs from the same machine.
+async fn set_note(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    axum::Json(body): axum::Json<NoteBody>,
+) -> Response {
+    let Some(history) = state.history.as_ref() else {
+        return (StatusCode::NOT_FOUND, "history is disabled").into_response();
+    };
+
+    // Counted in characters, not bytes, so the cap does not depend on which
+    // alphabet someone writes in — and truncation cannot split a code point.
+    let note: String = body.note.trim().chars().take(MAX_NOTE_CHARS).collect();
+
+    match history.set_note(id, &note) {
+        Ok(true) => (StatusCode::NO_CONTENT, ()).into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, "no such run").into_response(),
         Err(e) => e.into_response(),
     }
 }

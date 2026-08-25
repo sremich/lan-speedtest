@@ -85,8 +85,16 @@
           <button class="btn" id="restart" data-testid="restart" type="button" disabled>
             Retest
           </button>
-          <span class="phase" id="phase" data-testid="phase">Starting…</span>
         </div>
+
+        <!-- What is happening right now, directly above the strip it describes.
+             The spinner runs only while the engine does. -->
+        <p class="steps__now" id="steps-now" data-testid="steps-now">
+          <span class="spinner" aria-hidden="true"></span>
+          <span class="phase" id="phase" data-testid="phase">Starting…</span>
+          <span class="steps__payload" id="phase-detail" data-testid="phase-detail"></span>
+        </p>
+
         <div class="steps__strip" id="chevrons" data-testid="chevron-strip"></div>
         <div class="steps__tip" id="step-tip" data-testid="step-tip" hidden></div>
       </section>

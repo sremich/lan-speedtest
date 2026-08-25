@@ -6,7 +6,56 @@ three-part X.Y.Z (bugfix +0.0.1, minor +0.1.0, major +1.0.0). On release,
 move the Unreleased entries into a new version section, bump `VERSION`,
 commit, then tag.
 
-## [Unreleased]
+## [1.4.0] - 2026-08-25
+
+The run, described and explained.
+
+### Added
+
+- **A live stage line above the step strip**, with a spinner, the stage's name
+  in that stage's own colour, and the payload it is moving — "Measuring
+  download · 100 MB". The strip says what the run is *made of*; this says what
+  it is doing right now. The spinner is tied to the engine's own running state,
+  so pausing stops it rather than leaving it pretending to work, and a finished
+  run hides it rather than freezing it.
+
+- **A description per run.** A free-text note stored against the run — where
+  you were, on what device, what you were testing — editable from the history
+  table and from the run's own page. Per-run rather than per-client on purpose:
+  it is exactly the thing that differs between two runs from the same machine.
+  Capped at 280 characters, counted in characters so the cap does not depend on
+  the alphabet and truncation cannot split a character in half.
+
+### Changed
+
+- **The distribution tooltip is written in words.** It opens with a sentence
+  explaining what the marks actually mean, then labels every figure — "25th
+  percentile", not "p25". It is a styled tooltip rather than a native `title`,
+  which could not be styled, could not hold the explanation, and only appeared
+  after a delay. The row under the pointer is highlighted so the tooltip is
+  anchored to something. The legend now says "Average" to match.
+
+- **A distribution row is hovered anywhere along its band.** Previously the
+  pointer had to land on a mark, and on a LAN the values cluster so tightly
+  that the box is a few pixels wide with the average dot sitting on top of it.
+  The band is now the target and the marks are pointer-transparent.
+
+- **The step strip spreads across the width.** It was fixed-width chevrons
+  packed at the left, so on a wide monitor it stopped well short. Chevrons and
+  the gaps between them now grow together, bounded by how many chevrons there
+  are so a short profile spreads sensibly rather than scattering a dozen of
+  them across 1600px. Below a minimum width it wraps to a second row instead of
+  compressing — on a phone a strip that crosses twice reads far better than
+  forty-seven chevrons squeezed into 390px.
+
+### Fixed
+
+- **The "90th percentile" label sat at different heights on the two traces.**
+  Its position was clamped to a minimum while the line it labels was not, so
+  wherever the clamp bit, the label drifted off its own line — which is why
+  download and upload disagreed. The label is now pinned to the line and the
+  gap is a fixed CSS offset, identical on every chart. Where there is no room
+  above, it flips below by the same amount rather than sliding.
 
 ## [1.3.1] - 2026-08-25
 
@@ -558,7 +607,8 @@ milestone increments.
 - Tier-4 hardware validation outstanding; releases stay pre-release until it
   passes.
 
-[Unreleased]: https://github.com/sremich/self-hosted-cloudflare-speedtest/compare/v1.3.1...HEAD
+[Unreleased]: https://github.com/sremich/self-hosted-cloudflare-speedtest/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v1.4.0
 [1.3.1]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v1.3.1
 [1.3.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v1.3.0
 [1.2.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v1.2.0

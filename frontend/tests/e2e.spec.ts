@@ -226,11 +226,42 @@ test('the detail view shows a distribution per measurement', async ({ page }) =>
   // And the legend explains the marks, so the plot is readable without docs.
   await expect(body.locator('.box__legend')).toBeVisible();
 
-  // Every row carries a tooltip with the five-number summary.
-  const firstTitle = await body.locator('g.box__row title').first().textContent();
-  for (const key of ['min', 'p25', 'median', 'mean', 'p75', 'max']) {
-    expect(firstTitle, `tooltip should include ${key}`).toContain(key);
+  // Every row names itself for assistive technology, which cannot hover.
+  const label = await body.locator('g.box__row').first().getAttribute('aria-label');
+  expect(label, 'rows should carry an accessible summary').toMatch(/median/i);
+});
+
+test('hovering a distribution explains it in words, not statistics notation', async ({ page }) => {
+  // A box plot is only self-evident to people who already read box plots, and
+  // "p25" is not a label anyone says out loud.
+  await page.goto('/');
+  await waitForCompletion(page);
+
+  const row = page.locator('#detail-body g.box__row').first();
+  await row.scrollIntoViewIfNeeded();
+  // The row's hit area, not a mark: pointing at a 5px box is not something a
+  // person should have to do, so the whole band is the target.
+  await row.locator('rect.box__hit').hover();
+
+  const tip = page.getByTestId('box-tip');
+  await expect(tip).toBeVisible();
+  const text = (await tip.textContent()) ?? '';
+
+  expect(text, 'the sentence explaining the marks').toMatch(/25th to the 75th percentile/i);
+  for (const label of ['Min', 'Max', 'Average', 'Median', '25th percentile', '75th percentile']) {
+    expect(text, `tooltip should label ${label}`).toContain(label);
   }
+  expect(text, 'and how many samples it is made of').toMatch(/\d+ samples?/);
+
+  // The row under the pointer is marked, so the tooltip is anchored to it.
+  await expect(row).toHaveClass(/is-hovered/);
+
+  // The native tooltip must be gone, or the browser draws its own over ours.
+  expect(await row.locator('title').count(), 'a <title> would compete').toBe(0);
+
+  // And it goes away.
+  await page.mouse.move(2, 2);
+  await expect(tip).toBeHidden();
 });
 
 test('box geometry is ordered and inside the plot', async ({ page }) => {
@@ -493,6 +524,92 @@ test('the step strip shows every request the profile will issue', async ({ page 
   // "Complete" would misreport what was measured.
   expect(await strip.locator('.chev.is-done').count()).toBe(planned);
   await expect(strip.locator('.chevrons')).toHaveAttribute('aria-valuenow', String(planned));
+});
+
+test('a spinner and the current stage sit above the strip while it runs', async ({ page }) => {
+  // The strip says what the run is made of; this says what it is doing right
+  // now, in that stage's own colour, with the payload it is moving.
+  await page.goto('/');
+
+  const now = page.getByTestId('steps-now');
+  await expect(now).toBeVisible();
+  await expect(now, 'the spinner should run while the engine does').toHaveAttribute(
+    'data-running',
+    'true',
+  );
+
+  // It names a real stage at some point during the run, not just "Starting".
+  await expect
+    .poll(async () => (await page.getByTestId('phase').textContent()) ?? '', { timeout: 60_000 })
+    .toMatch(/Measuring/i);
+
+  await waitForCompletion(page);
+
+  await expect(page.getByTestId('phase')).toHaveText('Complete');
+  await expect(now, 'a finished run must not appear to still be working').toHaveAttribute(
+    'data-running',
+    'false',
+  );
+  expect(
+    await now.locator('.spinner').evaluate((e) => getComputedStyle(e).visibility),
+    'the spinner should be hidden rather than frozen',
+  ).toBe('hidden');
+});
+
+test('the step strip spreads across the width, and wraps rather than compressing', async ({
+  page,
+}) => {
+  // It used to be fixed-width chevrons packed at the left, so on a wide
+  // monitor the strip stopped well short. Chevrons and gaps now grow together
+  // to fill the strip, and the strip itself is bounded by how many chevrons
+  // there are — so a short profile spreads sensibly instead of scattering a
+  // dozen chevrons across 1600px.
+  await page.goto('/');
+  const strip = page.getByTestId('chevron-strip');
+  await expect(strip.locator('.chev').first()).toBeVisible();
+
+  const measure = async () =>
+    strip.evaluate((host) => {
+      const grid = host.querySelector('.chevrons') as HTMLElement;
+      const boxes = [...grid.querySelectorAll('.chev')].map((c) => c.getBoundingClientRect());
+      const top = Math.min(...boxes.map((b) => b.top));
+      const firstRow = boxes.filter((b) => Math.abs(b.top - top) < 2);
+      return {
+        count: boxes.length,
+        hostWidth: host.getBoundingClientRect().width,
+        gridWidth: grid.getBoundingClientRect().width,
+        spread: Math.max(...firstRow.map((b) => b.right)) - Math.min(...firstRow.map((b) => b.left)),
+        chevWidth: boxes[0]!.width,
+        rows: new Set(boxes.map((b) => Math.round(b.top))).size,
+      };
+    });
+
+  await page.setViewportSize({ width: 1600, height: 900 });
+  const wide = await measure();
+
+  // The chevrons occupy essentially the whole strip. A chevron is centred in
+  // its grid column, so the unused slack at the two edges adds up to one
+  // column and no more — however wide the strip itself works out to be.
+  const column = wide.gridWidth / wide.count;
+  expect(wide.spread).toBeGreaterThan(wide.gridWidth - column - 1);
+  expect(wide.rows, 'one row when there is room for one').toBe(1);
+
+  // And the strip is as wide as it should be: the container, or the bound the
+  // chevron count implies, whichever is smaller.
+  const bounded = Math.min(wide.hostWidth, wide.count * 34);
+  expect(Math.abs(wide.gridWidth - bounded)).toBeLessThan(2);
+
+  // On a phone it may cross the screen more than once. That is the point:
+  // wrapping beats squeezing every chevron into an illegible smear.
+  await page.setViewportSize({ width: 390, height: 844 });
+  const narrow = await measure();
+  expect(narrow.chevWidth, 'chevrons must stay wide enough to see').toBeGreaterThanOrEqual(4);
+  expect(narrow.rows, 'wrapping is allowed, within reason').toBeLessThanOrEqual(4);
+
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  );
+  expect(overflow, 'the strip must not push the page wider than the window').toBeLessThanOrEqual(1);
 });
 
 test('hovering a step explains it and reports what it measured', async ({ page }) => {

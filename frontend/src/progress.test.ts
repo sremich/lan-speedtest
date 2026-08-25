@@ -111,6 +111,13 @@ describe('renderChevrons', () => {
     expect(html).toContain('aria-valuenow="34"');
   });
 
+  it('tells CSS how many chevrons there are, so the strip can size itself', () => {
+    // The strip spreads to fill the width, bounded by the count — without it,
+    // a short profile scatters a dozen chevrons across a wide monitor.
+    const stages = planStages(ENGINE_DEFAULT);
+    expect(renderChevrons(stages, 0)).toContain(`--chev-count: ${totalRequests(stages)}`);
+  });
+
   it('draws nothing for an empty profile', () => {
     expect(renderChevrons([], 0)).toBe('');
   });

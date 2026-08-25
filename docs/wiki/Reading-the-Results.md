@@ -31,6 +31,11 @@ transfers have not begun. Hovering a chevron gives the stage's payload size,
 its request count, its position in the profile, and, once it has finished, what
 it measured.
 
+Above the strip, a line names the stage that is running right now, in that
+stage's colour, with the payload it is moving — "Measuring download · 100 MB".
+Its spinner follows the engine's own running state: pausing stops it, and a
+finished run hides it rather than leaving it turning.
+
 A stage marked **warm-up** is the engine's initial probe. It is exempt from
 `loaded_request_min_duration` and its samples are left out of the bandwidth
 figures entirely, so it reports no measurement — by design, not by failure.
@@ -72,19 +77,22 @@ So the detail section draws a box plot per measurement:
 ```
   |-----[ ####|##### ]-----|        o        o
   min   p25  med  p75    max              outliers
-             (mean shown as a dot)
+           (average shown as a dot)
 ```
 
 - **Box** — 25th to 75th percentile. A narrow box means a consistent link.
 - **Line in the box** — median.
-- **Dot** — mean. A mean well away from the median means the distribution is
-  skewed, usually by a few slow samples.
+- **Dot** — the average. An average well away from the median means the
+  distribution is skewed, usually by a few slow samples.
 - **Whiskers** — the furthest samples still within 1.5×IQR of the box. They
   stop at a real sample, never at the fence, so nothing is invented.
 - **Dots beyond the whiskers** — outliers. One slow request in a run of twenty
   is exactly the symptom worth chasing.
 
-Hovering a row gives the full five-number summary.
+Hovering anywhere along a row — not just on the marks — gives the full summary
+in words: what the box and whiskers mean, then the minimum, maximum, average,
+median and the two quartiles, each named rather than abbreviated, and how many
+samples it is drawn from.
 
 ### Why bandwidth is split by transfer size
 
@@ -138,3 +146,15 @@ curl -s -o /dev/null -w '%{speed_download} bytes/s\n' \
 Widening boxes over time, or outliers appearing where there were none, are worth
 investigating before the average moves — that is the point of keeping
 [history](Home.md).
+
+## Describing a run
+
+Any stored run can carry a short description — where you were, on what device,
+what you were trying to prove. Click it in the history table's Description
+column, or on the run's own page, and type.
+
+This is deliberately per-run rather than per-client. A client name says *which
+machine*; a description says *which test*, and that is what differs between two
+runs from the same laptop an hour and a floor apart. Without one, a history of
+twenty runs from `stevie-pc` is twenty numbers with no way to tell which was
+the one taken in the garage.

@@ -138,6 +138,8 @@ pub struct StoredRun {
     pub packet_loss: Option<f64>,
     pub total_duration_ms: Option<f64>,
     pub scores: std::collections::BTreeMap<String, String>,
+    /// A note written by hand after the fact. `None` when never set.
+    pub note: Option<String>,
 }
 
 /// A single run with everything kept about it, for a permalink.
@@ -244,6 +246,15 @@ impl History {
                 [],
             )?;
         }
+        // A note written afterwards: where in the house, on what device, what
+        // was being tested. Belongs to the run rather than the client, since
+        // that is the whole point of writing it down.
+        if !existing.iter().any(|c| c == "note") {
+            conn.execute(
+                "ALTER TABLE runs ADD COLUMN note TEXT NOT NULL DEFAULT ''",
+                [],
+            )?;
+        }
         Ok(())
     }
 
@@ -307,7 +318,7 @@ impl History {
         let sql = "SELECT r.id, r.recorded_at, r.client_ip, c.name, r.user_agent, r.profile,
                           r.download, r.upload, r.latency, r.jitter,
                           r.down_loaded_latency, r.up_loaded_latency, r.packet_loss,
-                          r.total_duration_ms, r.scores_json, n.name
+                          r.total_duration_ms, r.scores_json, n.name, r.note
                    FROM runs r
                    LEFT JOIN client_names c ON c.client_ip = r.client_ip
                    LEFT JOIN resolved_names n ON n.client_ip = r.client_ip
@@ -335,6 +346,7 @@ impl History {
                 packet_loss: row.get(12)?,
                 total_duration_ms: row.get(13)?,
                 scores: serde_json::from_str(&scores_json).unwrap_or_default(),
+                note: non_empty(row.get::<_, Option<String>>(16)?),
             })
         })?;
 
@@ -389,6 +401,19 @@ impl History {
         Ok(())
     }
 
+    /// Annotates one run, or clears the note when given an empty string.
+    ///
+    /// Returns whether a run with that id existed, so the caller can answer
+    /// 404 rather than silently accepting a note about nothing.
+    pub fn set_note(&self, id: i64, note: &str) -> Result<bool, HistoryError> {
+        let conn = self.conn.lock().expect("history mutex");
+        let changed = conn.execute(
+            "UPDATE runs SET note = ?2 WHERE id = ?1",
+            params![id, note.trim()],
+        )?;
+        Ok(changed > 0)
+    }
+
     /// A cached reverse-lookup result and when it was taken, if any.
     ///
     /// An entry with an empty name is a remembered miss — a client with no PTR
@@ -429,7 +454,7 @@ impl History {
                         r.download, r.upload, r.latency, r.jitter,
                         r.down_loaded_latency, r.up_loaded_latency, r.packet_loss,
                         r.total_duration_ms, r.scores_json, n.name,
-                        r.summary_json, r.points_json
+                        r.summary_json, r.points_json, r.note
                  FROM runs r
                  LEFT JOIN client_names c ON c.client_ip = r.client_ip
                  LEFT JOIN resolved_names n ON n.client_ip = r.client_ip
@@ -457,6 +482,7 @@ impl History {
                             packet_loss: row.get(12)?,
                             total_duration_ms: row.get(13)?,
                             scores: serde_json::from_str(&scores_json).unwrap_or_default(),
+                            note: non_empty(row.get::<_, Option<String>>(18)?),
                         },
                         summary: serde_json::from_str(&summary_json).unwrap_or_default(),
                         points: serde_json::from_str(&points_json).unwrap_or_default(),

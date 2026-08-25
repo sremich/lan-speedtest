@@ -257,3 +257,44 @@ test('a client can be given a name, and the name sticks', async ({ page, request
   await page.getByTestId('rename').click();
   await expect(page.locator('#rows tr').first()).toContainText(ip, { timeout: 20_000 });
 });
+
+test('a run can be given a description, from the history and the result page', async ({ page }) => {
+  // Per-run, not per-client: "upstairs landing, laptop on battery" is exactly
+  // what differs between two runs from the same machine.
+  await completeARun(page);
+
+  await page.goto('/history.html');
+  await expect
+    .poll(async () => page.locator('body').getAttribute('data-history-state'), { timeout: 20_000 })
+    .toBe('loaded');
+
+  const note = page.locator('#rows tr').first().getByTestId('note');
+  await expect(note).toContainText(/add/i);
+
+  page.once('dialog', (d) => void d.accept('upstairs landing, laptop on battery'));
+  await note.click();
+  await expect(note).toContainText('upstairs landing, laptop on battery', { timeout: 20_000 });
+
+  // It is stored, not remembered, so it survives a reload.
+  await page.reload();
+  await expect
+    .poll(async () => page.locator('body').getAttribute('data-history-state'), { timeout: 20_000 })
+    .toBe('loaded');
+  await expect(page.locator('#rows tr').first().getByTestId('note')).toContainText(
+    'upstairs landing',
+  );
+
+  // And the same description shows on the run's own page, where it can also
+  // be edited — that is the page a link lands on.
+  await page.locator('#rows tr').first().getByTestId('open-result').click();
+  await expect
+    .poll(async () => page.locator('body').getAttribute('data-result-state'), { timeout: 20_000 })
+    .toBe('loaded');
+  await expect(page.getByTestId('note')).toContainText('upstairs landing');
+
+  page.once('dialog', (d) => void d.accept('rewritten from the result page'));
+  await page.getByTestId('note').click();
+  await expect(page.getByTestId('note')).toContainText('rewritten from the result page', {
+    timeout: 20_000,
+  });
+});

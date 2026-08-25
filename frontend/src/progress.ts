@@ -143,7 +143,11 @@ export function renderChevrons(stages: readonly Stage[], done: number): string {
     }
   }
 
+  // The count goes to CSS so the strip can bound how far it spreads. It fills
+  // the width when there are enough chevrons to look like a strip, and stops
+  // short of scattering a dozen of them across a wide monitor.
   return `<div class="chevrons" data-testid="chevrons" role="progressbar"
+       style="--chev-count: ${total}"
        aria-label="Test progress" aria-valuemin="0" aria-valuemax="${total}" aria-valuenow="${Math.min(
          done,
          total,

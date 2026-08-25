@@ -7,7 +7,7 @@
  */
 
 import './styles.css';
-import { fetchStatus, setClientName } from './api';
+import { fetchStatus, setClientName, setRunNote } from './api';
 import { formatBandwidth, formatLatency, formatPacketLoss } from './format';
 
 interface StoredRun {
@@ -28,6 +28,8 @@ interface StoredRun {
   packetLoss: number | null;
   totalDurationMs: number | null;
   scores: Record<string, string>;
+  /** A note written by hand after the run. */
+  note: string | null;
 }
 
 interface ClientSummary {
@@ -254,6 +256,12 @@ ${r.userAgent}`;
         <td class="cell--num">${esc(formatPacketLoss(r.packetLoss ?? undefined))}</td>
         <td class="cell--ratings">${ratings}</td>
         <td class="cell--profile">${esc(r.profile)}</td>
+        <td class="cell--note">
+          <button class="desc" type="button" data-id="${r.id}" data-testid="note"
+                  title="${r.note ? esc(r.note) : 'Add a description'}">${
+                    r.note ? esc(r.note) : '<span class="desc--empty">add…</span>'
+                  }</button>
+        </td>
         <td class="cell--link">
           <a class="row-link" href="/result.html?id=${r.id}" data-testid="open-result">Open</a>
         </td>
@@ -334,6 +342,37 @@ ui.rename.addEventListener('click', () => {
     await loadClients();
     ui.clientFilter.value = ip;
     updateRenameControl();
+    await load();
+  })().catch(showError);
+});
+
+/**
+ * Editing a run's description.
+ *
+ * Delegated, because the table is re-rendered on every load and filter change.
+ * A prompt rather than an inline field: this is an occasional annotation, and
+ * a text input in every row would dominate a table that is mostly numbers.
+ */
+ui.rows.addEventListener('click', (event) => {
+  const button = (event.target as HTMLElement | null)?.closest<HTMLElement>('.desc');
+  if (!button) return;
+
+  const id = Number(button.dataset.id);
+  if (!Number.isInteger(id)) return;
+
+  const existing = lastRuns.find((r) => r.id === id)?.note ?? '';
+  const entered = window.prompt(
+    'Description for this run — where you were, on what, what you were testing.',
+    existing,
+  );
+  // Cancel is null and means leave it alone; an empty string clears it.
+  if (entered === null) return;
+
+  void (async () => {
+    if (!(await setRunNote(id, entered))) {
+      showError('Could not save that description.');
+      return;
+    }
     await load();
   })().catch(showError);
 });

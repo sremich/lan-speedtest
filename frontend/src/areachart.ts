@@ -52,6 +52,14 @@ const PAD = { top: 12, right: 6, bottom: 6, left: 6 };
 
 const EMPTY: AreaChart = { html: '', positions: [] };
 
+/**
+ * Below this height the marker label flips under its line.
+ *
+ * The chip is about one line of text tall; at the smallest height
+ * `--trace-h` allows, that is roughly 16% of the chart.
+ */
+const LABEL_FLIP_PCT = 16;
+
 /** Escapes text destined for HTML. */
 function esc(s: string): string {
   return s
@@ -107,13 +115,20 @@ export function renderAreaChart(samples: readonly number[], opts: AreaChartOptio
     markerLine = `<line x1="${PAD.left}" y1="${my.toFixed(1)}" x2="${W - PAD.right}" y2="${my.toFixed(
       1,
     )}" class="trace__marker" />`;
-    // The label sits above its line, so a marker near the top of a short
-    // chart would push it out of the card. 18% clears one line of text at the
-    // smallest height `--trace-h` allows.
-    const top = Math.min(97, Math.max(18, (my / H) * 100));
-    markerLabel = `<span class="trace__marker-label" style="top: ${top.toFixed(2)}%">${esc(
-      opts.marker.label,
-    )}</span>`;
+    // The label is pinned to its own line and offset by a fixed number of
+    // pixels in CSS, never by adjusting this percentage. Clamping the
+    // percentage instead — as this did — moved the label off its line by
+    // however much the clamp bit, so download and upload ended up sitting at
+    // visibly different distances from the thing they label.
+    //
+    // Near the top of the chart there is no room for the chip above the line,
+    // so it flips below. That is a deliberate, discrete choice rather than a
+    // gradual drift, and the gap stays the same either way.
+    const linePct = (my / H) * 100;
+    const side = linePct < LABEL_FLIP_PCT ? 'below' : 'above';
+    markerLabel = `<span class="trace__marker-label" data-side="${side}" style="top: ${linePct.toFixed(
+      2,
+    )}%">${esc(opts.marker.label)}</span>`;
   }
 
   const html = `<div class="trace__plot">

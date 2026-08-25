@@ -108,18 +108,25 @@ export function renderBoxPlots(rows: Distribution[], opts: BoxPlotOptions): stri
       const boxW = Math.max(MIN_BOX_W, rawW);
       const boxX = rawW >= MIN_BOX_W ? x(s.p25) : x(s.median) - MIN_BOX_W / 2;
 
-      const tooltip = [
-        `${row.label} — ${row.detail}`,
-        `min ${opts.format(s.min)}`,
-        `p25 ${opts.format(s.p25)}`,
-        `median ${opts.format(s.median)}`,
-        `mean ${opts.format(s.mean)}`,
-        `p75 ${opts.format(s.p75)}`,
-        `max ${opts.format(s.max)}`,
-        s.outliers.length > 0
-          ? `${s.outliers.length} outlier${s.outliers.length === 1 ? '' : 's'}`
-          : 'no outliers',
-      ].join('\n');
+      // Carried as data rather than as a `<title>`: a native tooltip cannot be
+      // styled, cannot hold the sentence that explains what the marks mean,
+      // and only appears after a delay. The detail panel reads these and
+      // renders the same tooltip the traces and the step strip use.
+      const tip: BoxTipData = {
+        label: row.label,
+        detail: row.detail,
+        min: opts.format(s.min),
+        max: opts.format(s.max),
+        mean: opts.format(s.mean),
+        median: opts.format(s.median),
+        p25: opts.format(s.p25),
+        p75: opts.format(s.p75),
+        samples: s.count,
+        outliers: s.outliers.length,
+      };
+      const tipAttrs = Object.entries(tip)
+        .map(([k, v]) => `data-${k}="${esc(String(v))}"`)
+        .join(' ');
 
       const outlierDots = s.outliers
         .map(
@@ -128,8 +135,15 @@ export function renderBoxPlots(rows: Distribution[], opts: BoxPlotOptions): stri
         )
         .join('');
 
-      return `<g class="box__row">
-        <title>${esc(tooltip)}</title>
+      // `aria-label`, not `<title>`: it names the group for assistive technology
+      // without the browser drawing its own tooltip on top of ours.
+      return `<g class="box__row" role="img" aria-label="${esc(ariaSummary(tip))}" ${tipAttrs}>
+        <!-- The row's hit area. Without it you have to land the pointer on a
+             mark, and on a LAN the marks are a few pixels wide: the whole
+             band should answer the hover, not just the ink. Every mark above
+             it is pointer-transparent so none of them can intercept. -->
+        <rect x="0" y="${(cy - ROW_H / 2).toFixed(1)}" width="${W}" height="${ROW_H}"
+              class="box__hit" />
         <text x="0" y="${(cy + 4).toFixed(1)}" class="box__label">${esc(row.label)}</text>
 
         <line x1="${x(s.lowerWhisker).toFixed(1)}" y1="${cy.toFixed(1)}"
@@ -159,12 +173,93 @@ export function renderBoxPlots(rows: Distribution[], opts: BoxPlotOptions): stri
   </svg>`;
 }
 
+/** Everything the tooltip shows, pre-formatted. */
+export interface BoxTipData {
+  label: string;
+  detail: string;
+  min: string;
+  max: string;
+  mean: string;
+  median: string;
+  p25: string;
+  p75: string;
+  samples: number;
+  outliers: number;
+}
+
+/**
+ * What the marks mean, in a sentence.
+ *
+ * A box plot is only obvious to people who already read box plots, and the
+ * legend alone does not say how the pieces relate. This describes what is
+ * actually drawn here — a dot for the average, not the dotted line other
+ * tools use — because a tooltip that describes a different chart is worse
+ * than none.
+ */
+const BOX_EXPLAINER =
+  'The bar covers the middle half of the samples, from the 25th to the 75th ' +
+  'percentile. The line through it is the median and the dot is the average. ' +
+  'The whiskers reach the furthest samples within 1.5× that range; anything ' +
+  'beyond them is drawn as an outlier.';
+
+/** Reads the tooltip data back off a rendered row. */
+export function boxTipData(el: { dataset: Record<string, string | undefined> }): BoxTipData {
+  const d = el.dataset;
+  return {
+    label: d.label ?? '',
+    detail: d.detail ?? '',
+    min: d.min ?? '',
+    max: d.max ?? '',
+    mean: d.mean ?? '',
+    median: d.median ?? '',
+    p25: d.p25 ?? '',
+    p75: d.p75 ?? '',
+    samples: Number(d.samples ?? 0),
+    outliers: Number(d.outliers ?? 0),
+  };
+}
+
+/** One-line summary for assistive technology, which cannot hover. */
+export function ariaSummary(d: BoxTipData): string {
+  return (
+    `${d.label}: median ${d.median}, average ${d.mean}, ` +
+    `range ${d.min} to ${d.max}, ${d.samples} samples`
+  );
+}
+
+function tipRow(label: string, value: string): string {
+  return `<div class="tip__row"><span class="tip__key">${esc(label)}</span>` +
+    `<span class="tip__value">${esc(value)}</span></div>`;
+}
+
+/** The tooltip shown when a row is hovered. */
+export function boxTipMarkup(d: BoxTipData): string {
+  const counts = [
+    `${d.samples} sample${d.samples === 1 ? '' : 's'}`,
+    d.outliers > 0 ? `${d.outliers} outlier${d.outliers === 1 ? '' : 's'}` : null,
+  ]
+    .filter((x): x is string => x !== null)
+    .join(' · ');
+
+  return (
+    `<div class="tip__head">${esc(d.label)}</div>` +
+    `<p class="tip__explain">${BOX_EXPLAINER}</p>` +
+    tipRow('Min', d.min) +
+    tipRow('Max', d.max) +
+    tipRow('Average', d.mean) +
+    tipRow('Median', d.median) +
+    tipRow('25th percentile', d.p25) +
+    tipRow('75th percentile', d.p75) +
+    `<div class="tip__foot">${esc(counts)}</div>`
+  );
+}
+
 /** The shared key explaining what the marks mean. */
 export const BOXPLOT_LEGEND = `
   <div class="box__legend">
     <span class="box__key box__key--box">25th–75th percentile</span>
     <span class="box__key box__key--median">Median</span>
-    <span class="box__key box__key--mean">Mean</span>
+    <span class="box__key box__key--mean">Average</span>
     <span class="box__key box__key--whisker">Min–max within 1.5×IQR</span>
     <span class="box__key box__key--outlier">Outlier</span>
   </div>`;

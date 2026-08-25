@@ -185,6 +185,8 @@ export interface StoredRunDetail {
   packetLoss: number | null;
   totalDurationMs: number | null;
   scores: Record<string, string>;
+  /** A note written by hand after the run. */
+  note: string | null;
   summary: Record<string, number | undefined>;
   points: Record<string, unknown>;
 }
@@ -198,6 +200,19 @@ export const fetchResult = (id: number): Promise<StoredRunDetail> =>
  * Best-effort in the same way results are: failing to rename a row is not a
  * reason to fail the page it is on.
  */
+export async function setRunNote(id: number, note: string): Promise<boolean> {
+  try {
+    const res = await fetch(`/api/results/${encodeURIComponent(String(id))}/note`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ note }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 export async function setClientName(ip: string, name: string): Promise<boolean> {
   try {
     const res = await fetch(`/api/clients/${encodeURIComponent(ip)}/name`, {

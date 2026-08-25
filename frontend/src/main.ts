@@ -113,6 +113,8 @@ const ui = {
   rawResult: el('raw-result'),
   profileSelect: el<HTMLSelectElement>('profile-select'),
   chevrons: el('chevrons'),
+  stepsNow: el('steps-now'),
+  phaseDetail: el('phase-detail'),
   stepTip: el('step-tip'),
 };
 
@@ -403,6 +405,24 @@ function showStepTip(step: number, chev: HTMLElement): void {
   );
 }
 
+/**
+ * The line above the strip: what is running, in that stage's colour, with the
+ * payload size it is moving.
+ *
+ * `running` drives the spinner. It is deliberately tied to the engine's own
+ * state rather than to a timer, so a paused run stops spinning instead of
+ * pretending to still be working.
+ */
+function showNow(label: string, type: string | undefined, running: boolean): void {
+  setText(ui.phase, label);
+  ui.stepsNow.dataset.running = running ? 'true' : 'false';
+  ui.stepsNow.style.setProperty('--stage', type ? stageColour(type) : 'var(--text-dim)');
+
+  const stage = currentStage >= 0 ? stages[currentStage] : undefined;
+  ui.phaseDetail.textContent =
+    running && stage?.bytes !== undefined ? `· ${formatPayload(stage.bytes)}` : '';
+}
+
 function stageColour(type: string): string {
   switch (type) {
     case 'download':
@@ -485,7 +505,7 @@ async function pickAutoProfile(): Promise<string | undefined> {
     .sort((a, b) => (a.nominalBps ?? 0) - (b.nominalBps ?? 0));
   if (candidates.length === 0) return undefined;
 
-  setText(ui.phase, 'Sizing the test to the link…');
+  showNow('Sizing the test to the link…', undefined, true);
   try {
     const probe = await measureParallelThroughput({
       streams: 1,
@@ -571,7 +591,7 @@ async function run(): Promise<void> {
   completedRequests = 0;
   currentStage = -1;
   paintChevrons();
-  setText(ui.phase, 'Starting…');
+  showNow('Starting…', undefined, true);
 
   const status = await fetchStatus();
 
@@ -615,7 +635,7 @@ async function run(): Promise<void> {
 
   engine.onPhaseChange = ({ measurement }) => {
     advanceStage(engine.results);
-    ui.phase.textContent = PHASE_LABELS[measurement.type] ?? measurement.type;
+    showNow(PHASE_LABELS[measurement.type] ?? measurement.type, measurement.type, true);
   };
 
   engine.onResultsChange = () => {
@@ -626,7 +646,7 @@ async function run(): Promise<void> {
   engine.onError = (message: string) => {
     showError(`Test failed: ${message}`);
     ui.restart.disabled = false;
-    setText(ui.phase, 'Failed');
+    showNow('Failed', undefined, false);
   };
 
   engine.onFinish = (results) => {
@@ -636,7 +656,7 @@ async function run(): Promise<void> {
     advanceStage(results);
     completedRequests = totalRequests(stages);
     paintChevrons();
-    setText(ui.phase, 'Complete');
+    showNow('Complete', undefined, false);
     ui.restart.disabled = false;
     ui.pause.disabled = true;
     document.body.dataset.testState = 'complete';
@@ -726,9 +746,13 @@ ui.pause.addEventListener('click', () => {
   if (engine.isRunning) {
     engine.pause();
     ui.pause.textContent = 'Resume';
+    // Stop the spinner too: a paused run that still appears to be working is
+    // the one thing the indicator must not do.
+    ui.stepsNow.dataset.running = 'false';
   } else {
     engine.play();
     ui.pause.textContent = 'Pause';
+    ui.stepsNow.dataset.running = 'true';
   }
 });
 
@@ -782,7 +806,7 @@ function showPermalink(id: number): void {
 function start(): Promise<void> {
   return run().catch((e: unknown) => {
     showError(e instanceof Error ? e.message : String(e));
-    setText(ui.phase, 'Failed');
+    showNow('Failed', undefined, false);
     ui.restart.disabled = false;
     document.body.dataset.testState = 'error';
   });

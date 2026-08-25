@@ -11,7 +11,7 @@
  */
 
 import { renderAreaChart, type SamplePosition } from './areachart';
-import { BOXPLOT_LEGEND, renderBoxPlots } from './boxplot';
+import { BOXPLOT_LEGEND, boxTipData, boxTipMarkup, renderBoxPlots } from './boxplot';
 import { formatBandwidth } from './format';
 import { formatPayload } from './progress';
 import { bandwidthBySize, formatTransferSize, summarise, type Distribution } from './stats';
@@ -284,6 +284,7 @@ export function renderDetail(host: HTMLElement, samples: RunSamples): void {
 
   const width = detailWidth(host);
   host.innerHTML =
+    `<div class="box__plots">` +
     groups
       .map(
         (g) => `<div class="box__group">
@@ -297,5 +298,52 @@ export function renderDetail(host: HTMLElement, samples: RunSamples): void {
       )
       .join('') +
     packetLossBar +
-    BOXPLOT_LEGEND;
+    BOXPLOT_LEGEND +
+    `<div class="tip box__tip" data-testid="box-tip" hidden></div></div>`;
+
+  attachBoxHover(host);
+}
+
+/**
+ * Hover on a distribution row.
+ *
+ * Delegated from the panel rather than bound per row, because the panel is
+ * re-rendered on every resize and on every results change — per-row listeners
+ * would have to be torn down each time, and one missed teardown is a leak
+ * that only shows up after a long run.
+ */
+function attachBoxHover(host: HTMLElement): void {
+  const tip = host.querySelector<HTMLElement>('.box__tip');
+  const within = host.querySelector<HTMLElement>('.box__plots');
+  if (!tip || !within) return;
+
+  host.addEventListener('pointermove', (event) => {
+    const target = event.target as Element | null;
+    const row = target?.closest<SVGGElement>('g.box__row');
+    if (!row) {
+      tip.hidden = true;
+      highlightRow(host, null);
+      return;
+    }
+
+    highlightRow(host, row);
+    tip.innerHTML = boxTipMarkup(boxTipData(row as unknown as { dataset: DOMStringMap }));
+    tip.hidden = false;
+
+    const box = within.getBoundingClientRect();
+    placeTip(tip, within, event.clientX - box.left, event.clientY - box.top);
+  });
+
+  host.addEventListener('pointerleave', () => {
+    tip.hidden = true;
+    highlightRow(host, null);
+  });
+}
+
+/** Marks the row the tooltip is describing, so it is anchored to something. */
+function highlightRow(host: HTMLElement, row: SVGGElement | null): void {
+  for (const g of host.querySelectorAll<SVGGElement>('g.box__row.is-hovered')) {
+    if (g !== row) g.classList.remove('is-hovered');
+  }
+  row?.classList.add('is-hovered');
 }

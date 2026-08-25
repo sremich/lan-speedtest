@@ -8,7 +8,7 @@
  */
 
 import './styles.css';
-import { fetchResult, fetchStatus, type StoredRunDetail } from './api';
+import { fetchResult, fetchStatus, setRunNote, type StoredRunDetail } from './api';
 import { formatBandwidth, formatDuration, formatLatency, formatPacketLoss } from './format';
 import {
   attachTraceHover,
@@ -34,6 +34,7 @@ const el = <T extends HTMLElement>(id: string): T => {
 const ui = {
   title: el('page-title'),
   error: el('error'),
+  note: el<HTMLButtonElement>('note'),
   download: el('download'),
   downloadUnit: el('download-unit'),
   upload: el('upload'),
@@ -69,6 +70,9 @@ function setText(node: HTMLElement, value: string): void {
 
 /** The most recent run, so a resize can redraw without refetching. */
 let lastSamples: RunSamples | undefined;
+
+/** The run on screen, so the description can be edited against it. */
+let current: StoredRunDetail | undefined;
 
 /**
  * Reads the stored sample blob.
@@ -120,6 +124,7 @@ function clientLabel(run: StoredRunDetail): string {
 }
 
 function render(run: StoredRunDetail): void {
+  current = run;
   const optional = (v: number | null): number | undefined => (v === null ? undefined : v);
 
   const down = formatBandwidth(optional(run.download));
@@ -164,8 +169,38 @@ function render(run: StoredRunDetail): void {
   ui.profile.textContent = `profile: ${run.profile}`;
   ui.agent.textContent = run.userAgent;
 
+  renderNote(run);
   document.body.dataset.resultState = 'loaded';
 }
+
+/** The run's description, or an invitation to write one. */
+function renderNote(run: StoredRunDetail): void {
+  ui.note.dataset.id = String(run.id);
+  ui.note.innerHTML = run.note
+    ? esc(run.note)
+    : '<span class="desc--empty">Add a description…</span>';
+}
+
+ui.note.addEventListener('click', () => {
+  const id = Number(ui.note.dataset.id);
+  if (!Number.isInteger(id)) return;
+
+  const entered = window.prompt(
+    'Description for this run — where you were, on what, what you were testing.',
+    current?.note ?? '',
+  );
+  // Cancel is null and means leave it alone; an empty string clears it.
+  if (entered === null) return;
+
+  void (async () => {
+    if (!(await setRunNote(id, entered))) {
+      showError('Could not save that description.');
+      return;
+    }
+    current = await fetchResult(id);
+    renderNote(current);
+  })().catch((e: unknown) => showError(e instanceof Error ? e.message : String(e)));
+});
 
 function showError(message: string): void {
   ui.error.textContent = message;

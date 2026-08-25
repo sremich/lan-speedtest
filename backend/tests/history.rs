@@ -652,3 +652,119 @@ measurements = [ {{ type = 'download', bytes = 1000, count = 1 }} ]
         "127.0.0.1 is outside the configured ranges and must not be looked up"
     );
 }
+
+#[tokio::test]
+async fn a_run_can_be_annotated_after_the_fact() {
+    // The note is per-run, not per-client: "upstairs landing, laptop on
+    // battery, checking the new AP" is exactly what differs between two runs
+    // from the same machine.
+    let history = Arc::new(History::in_memory().unwrap());
+    let base = serve(Some(history)).await;
+    let c = client();
+
+    let created: serde_json::Value = c
+        .post(format!("{base}/api/results"))
+        .json(&submission(9.4e8, "lan-1g"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let id = created["id"].as_i64().unwrap();
+
+    let res = c
+        .post(format!("{base}/api/results/{id}/note"))
+        .json(&serde_json::json!({ "note": "  upstairs landing, laptop on battery  " }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 204);
+
+    // Visible both in the list and on the run itself, so the history table can
+    // show it and the permalink can too.
+    let runs: serde_json::Value = c
+        .get(format!("{base}/api/history"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(runs[0]["note"], "upstairs landing, laptop on battery");
+
+    let one: serde_json::Value = c
+        .get(format!("{base}/api/results/{id}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(one["note"], "upstairs landing, laptop on battery");
+
+    // Clearing it returns to no note rather than an empty string, so the front
+    // end has one thing to test for.
+    c.post(format!("{base}/api/results/{id}/note"))
+        .json(&serde_json::json!({ "note": "" }))
+        .send()
+        .await
+        .unwrap();
+    let runs: serde_json::Value = c
+        .get(format!("{base}/api/history"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(runs[0]["note"].is_null());
+}
+
+#[tokio::test]
+async fn a_note_is_capped_in_characters_and_refused_for_a_missing_run() {
+    let history = Arc::new(History::in_memory().unwrap());
+    let base = serve(Some(history)).await;
+    let c = client();
+
+    let created: serde_json::Value = c
+        .post(format!("{base}/api/results"))
+        .json(&submission(9.4e8, "lan-1g"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let id = created["id"].as_i64().unwrap();
+
+    // Multi-byte on purpose: a byte cap would both cut this far shorter than
+    // intended and risk splitting a character in half.
+    let long = "é".repeat(400);
+    c.post(format!("{base}/api/results/{id}/note"))
+        .json(&serde_json::json!({ "note": long }))
+        .send()
+        .await
+        .unwrap();
+
+    let runs: serde_json::Value = c
+        .get(format!("{base}/api/history"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let stored = runs[0]["note"].as_str().unwrap();
+    assert_eq!(stored.chars().count(), 280);
+    assert!(stored.chars().all(|ch| ch == 'é'), "a character was split");
+
+    // A note about a run that does not exist is a 404, not a silent success.
+    let missing = c
+        .post(format!("{base}/api/results/{}/note", id + 999))
+        .json(&serde_json::json!({ "note": "nowhere" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), 404);
+}

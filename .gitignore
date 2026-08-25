@@ -27,6 +27,12 @@ dist/
 build/
 *.tsbuildinfo
 
+# --- Rust build output ---
+# `CARGO_TARGET_DIR` is exported out-of-tree for the backend (OneDrive), but the
+# provisioner commands in CLAUDE.md do not set it, so this directory is real.
+/backend/target/
+/provisioning/proxmox/target/
+
 # --- test artefacts ---
 /frontend/test-results/
 /frontend/playwright-report/

@@ -38,6 +38,15 @@
   --font-num: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
 }
 
+/* `hidden` is how this app hides things — every panel, tooltip and empty-state
+   toggles the attribute from TypeScript. The user agent's `[hidden]` rule is
+   the weakest thing in the cascade, so any author rule that sets `display` on
+   a class beats it and silently reveals the element. This has happened once
+   already; `!important` here is the one place it is the right tool. */
+[hidden] {
+  display: none !important;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -233,10 +242,12 @@ body {
 
 /* Sits just above its line. A CSS font size here means what it says at every
    window width, which SVG text inside a stretched viewBox does not. */
+/* `top` is exactly where the marker line is; the gap comes from here, so it
+   is identical on every chart regardless of where the line falls. */
 .trace__marker-label {
   position: absolute;
   left: 4px;
-  transform: translateY(-100%);
+  transform: translateY(calc(-100% - 5px));
   /* A chip, because the label sits over the curve it describes and dim text
      on a filled gradient is unreadable. */
   background: rgba(13, 17, 23, 0.72);
@@ -247,6 +258,11 @@ body {
   color: var(--text-dim);
   white-space: nowrap;
   pointer-events: none;
+}
+
+/* No room above the line, so it sits under it — with the same gap. */
+.trace__marker-label[data-side='below'] {
+  transform: translateY(5px);
 }
 
 /* --- vitals column -------------------------------------------------------- */
@@ -379,6 +395,48 @@ body {
   font-weight: 600;
 }
 
+/* The distribution tooltip carries a sentence as well as figures, so unlike
+   the trace tooltip it has to wrap and needs a width to wrap within. */
+.box__plots {
+  position: relative;
+}
+
+.box__tip {
+  white-space: normal;
+  max-width: min(340px, 88vw);
+}
+
+.tip__explain {
+  margin: 0 0 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font);
+  font-size: 0.74rem;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+
+/* Figures in a column, so the values line up rather than ragging along the
+   ends of labels of very different lengths. */
+.tip__row {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  white-space: nowrap;
+}
+
+.tip__foot {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+  color: var(--text-dim);
+}
+
+/* The row under the pointer, so the tooltip is anchored to something visible. */
+g.box__row.is-hovered .box__box {
+  fill-opacity: 0.55;
+}
+
 /* --- the step strip -------------------------------------------------------
 
    One chevron per request the profile will issue, so the shape of the run is
@@ -399,20 +457,81 @@ body {
   flex-wrap: wrap;
 }
 
+/* What is running right now, directly above the strip it describes, in that
+   stage's own colour so the sentence and the chevrons filling in agree. */
+.steps__now {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  min-height: 20px;
+}
+
+.steps__now .phase {
+  color: var(--stage, var(--text-dim));
+  font-weight: 600;
+}
+
+.steps__payload {
+  color: var(--text-dim);
+  font-family: var(--font-num);
+  font-size: 0.8rem;
+}
+
+/* A ring with one quarter missing, rotating. Drawn from a border rather than
+   an image or a glyph so it inherits the stage colour and stays crisp. */
+.spinner {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--stage, var(--text-dim)) 30%, transparent);
+  border-top-color: var(--stage, var(--text-dim));
+  animation: spin 0.7s linear infinite;
+}
+
+/* Hidden rather than frozen when nothing is running: a stopped spinner reads
+   as a stalled one. */
+.steps__now[data-running='false'] .spinner {
+  visibility: hidden;
+  animation: none;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* The flex rules belong on `.chevrons`, which is the element the renderer
    emits — `.steps__strip` is only its host. Put them on the host and the
    chevrons stay inline spans, which ignore width and height entirely. */
+/* Grid rather than flex, so the strip spans the full width at any size.
+   `auto-fit` lays out as many equal columns as will fit and collapses the
+   empty ones, which leaves exactly one column per chevron sharing the whole
+   width — the chevrons and the space between them grow together.
+
+   Past the minimum column width the row wraps instead of compressing. That is
+   deliberate on a phone: a strip crossing the screen twice reads fine, where
+   thirty-four chevrons squeezed into 390px is an illegible smear. */
 .chevrons {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(var(--chev-min, 14px), 1fr));
+  row-gap: 5px;
   align-items: center;
+  /* Bounded by how many chevrons there are, from `--chev-count`. A long
+     profile fills the window; a short one stops rather than scattering
+     fourteen chevrons across a 1600px monitor with 68px between them. */
+  max-width: calc(var(--chev-count, 40) * 34px);
 }
 
 .chev {
-  width: 9px;
+  /* Fills its column up to a cap. The cap is what turns surplus width into
+     spacing rather than into implausibly fat chevrons. */
+  width: 100%;
+  max-width: 16px;
+  justify-self: center;
   height: 20px;
-  flex: 0 0 auto;
   background: var(--border);
   /* Drawn rather than typed: a glyph would depend on a font being present and
      would not stay crisp at this size. */
@@ -529,10 +648,28 @@ body {
   font-family: var(--font-num);
 }
 
+/* Narrower columns on a phone, so a long profile wraps to two rows rather
+   than three or four. */
+@media (max-width: 480px) {
+  .chevrons {
+    --chev-min: 10px;
+  }
+
+  .chev {
+    max-width: 12px;
+    height: 17px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .btn,
   .chev {
     transition: none;
+  }
+
+  /* Still shown, because it is the "working" indicator — just not spinning. */
+  .spinner {
+    animation: none;
   }
 }
 
@@ -674,6 +811,51 @@ body {
 .cell--client { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
 .cell--profile { color: var(--text-dim); font-family: var(--font-num); font-size: 0.8em; }
 .cell--link { text-align: right; white-space: nowrap; }
+.cell--note { max-width: 260px; }
+
+/* A button rather than a field: the description is an occasional annotation,
+   and an input in every row would dominate a table that is mostly numbers.
+
+   Named `desc`, not `note`: `.note` is the prose class, and a second rule of
+   the same name giving it `display: block` overrode the user agent's
+   `[hidden] { display: none }` and revealed every hidden paragraph on the
+   site. The base rule at the top of this file now makes that unrepeatable,
+   but the two things were never the same thing and should not share a name. */
+.desc {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: var(--text);
+  cursor: text;
+}
+
+.desc:hover,
+.desc:focus-visible {
+  color: var(--accent);
+}
+
+/* On the permalink the description is a heading-adjacent line, not a cell. */
+.result__desc {
+  margin: 0 0 4px;
+}
+
+.result__desc .desc {
+  font-size: 0.95rem;
+  white-space: normal;
+}
+
+.desc--empty {
+  color: var(--text-dim);
+  opacity: 0.6;
+}
 
 /* The link back to a stored run. Understated until the row is hovered: it is
    on every row, and nine identical bright links would be all you saw. */
@@ -774,6 +956,11 @@ body {
 .box__mean { fill: #58a6ff; }
 .box__outlier { fill: var(--bad); }
 .box__row:hover .box__box { fill: rgba(246, 130, 31, 0.3); }
+
+/* The whole row band answers the hover, and only the band: a 5px-wide box
+   with a mean dot sitting on it is not something you can reliably point at. */
+.box__hit { fill: transparent; }
+.box__row > *:not(.box__hit) { pointer-events: none; }
 
 .box__legend {
   display: flex;

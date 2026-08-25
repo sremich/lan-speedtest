@@ -28,6 +28,7 @@ jitter and packet loss answer and a plain throughput test does not.
 | Distribution | Every sample, per transfer size and latency phase: min, max, mean, median, 25th/75th percentile and outliers |
 | Raw throughput | Parallel-stream figure, on demand, reported separately from the engine's single-stream result |
 | History | Every run stored, with a trend chart, per-client filtering, and a permalink that redraws the run rather than summarising it |
+| Descriptions | A free-text note per run — where you were, on what, what you were testing — written from the history table or the run's own page |
 
 ## Nothing leaves your network
 
