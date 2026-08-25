@@ -3,8 +3,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use axum::serve::ListenerExt;
 use tracing_subscriber::EnvFilter;
 
+use lan_speedtest::net;
 use lan_speedtest::routes;
 use lan_speedtest::{AppState, Config, History, PayloadSource, GIT_SHA, VERSION};
 
@@ -89,6 +91,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let http = {
         let app = app.clone();
+        // Nagle off — see net.rs. A 40 ms delayed-ACK stall on a small
+        // response is reported to the user as network latency.
+        let listener = listener.tap_io(net::set_nodelay);
         tokio::spawn(async move {
             // `_with_connect_info` is what makes the peer address available;
             // without it every stored run would be attributed to "unknown".
@@ -129,7 +134,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 shutdown_handle.graceful_shutdown(Some(std::time::Duration::from_secs(5)));
             });
 
-            axum_server::bind_rustls(addr, tls_config)
+            // Not `bind_rustls`: that wraps `DefaultAcceptor`, which passes
+            // the socket through untouched and leaves Nagle on. See net.rs.
+            axum_server::bind(addr)
+                .acceptor(net::tls_acceptor(tls_config))
                 .handle(handle)
                 .serve(app.into_make_service_with_connect_info::<std::net::SocketAddr>())
                 .await?;

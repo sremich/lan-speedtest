@@ -32,6 +32,40 @@ This cannot be fixed from our side: the engine reads latency only from
 want the quality ratings on a fast LAN. Bandwidth, jitter and packet loss are
 unaffected.
 
+## Latency is tens of milliseconds on a LAN, and bimodal
+
+**Symptom.** Idle latency is mostly sub-millisecond but some samples land near
+40 ms; loaded-download latency sits in a tight cluster around 25-30 ms while
+loaded-upload is much lower. It reads like asymmetric bufferbloat.
+
+**Cause, if you are running anything before 1.3.1.** The TLS listener did not
+set `TCP_NODELAY`. Nagle's algorithm withholds the second part of a small
+write until the first is acknowledged, and the peer's delayed-ACK timer holds
+that acknowledgement for up to 40 ms (`TCP_DELACK_MIN` on Linux). The engine's
+latency probe is `GET /__down?bytes=0` — exactly that kind of small response —
+so the stall was reported as network latency.
+
+**Confirming it is this and not your network.** Probe a *different* host on the
+same LAN at the same moment. Real congestion delays both; this delays only the
+speed test:
+
+```bash
+curl -sk -o /dev/null -w 'ttfb=%{time_starttransfer} tls=%{time_appconnect}
+' https://speedtest.example/api/health
+curl -sk -o /dev/null -w 'ttfb=%{time_starttransfer} tls=%{time_appconnect}
+' https://other-host.example/
+```
+
+Subtract `tls` from `ttfb`. If the speed test is tens of milliseconds and the
+other host is not, it is this. Comparing plain HTTP against HTTPS on the *same*
+server is the other tell — plain was unaffected.
+
+**Note this is invisible on `127.0.0.1`**, where the round trip is too short
+for an acknowledgement to be delayed. Reproducing it needs a real link.
+
+**Fix.** Upgrade to 1.3.1 or later. Latency figures stored before it are
+inflated by up to 40 ms and cannot be corrected retrospectively.
+
 ## Latency looks quantised, or reads 0
 
 Expected on a LAN. Browsers coarsen resource timing for privacy — roughly

@@ -5,6 +5,22 @@ pre-releases; from 1.0.0 they are full releases. The 10 GbE saturation check
 was waived, and "no external traffic" is proven by an end-to-end test on every
 push rather than by a manual packet capture.
 
+## 1.3.1
+
+The latency figures become true.
+
+- **`TCP_NODELAY` was never set on the TLS listener**, so small HTTPS responses
+  stalled up to 40 ms on Nagle waiting for a delayed ACK. The engine's latency
+  probe is exactly such a response, so the stall was reported as network
+  latency. Idle, on the deployed guest: HTTPS 41.9 ms mean against plain HTTP
+  0.6 ms; 0.7 ms after the fix.
+- This was the "unexplained asymmetric bufferbloat" recorded since 1.0.0. It
+  was neither asymmetric nor bufferbloat.
+- Invisible on loopback, where the round trip is too short for an
+  acknowledgement to be delayed — which is why every test tier passed
+  throughout. The guard is now the return type of `net::tls_acceptor`.
+- Latency stored by earlier versions is inflated by up to 40 ms.
+
 ## 1.3.0
 
 Whose run it was, and how to get back to it.

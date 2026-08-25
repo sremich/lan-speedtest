@@ -8,6 +8,37 @@ commit, then tag.
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-08-25
+
+The latency figures become true.
+
+### Fixed
+
+- **The TLS listener never set `TCP_NODELAY`, inflating every latency figure
+  by up to 40 ms.** `axum_server::bind_rustls` wraps `DefaultAcceptor`, which
+  hands the accepted socket on untouched, so Nagle's algorithm withheld the
+  second half of a small response until the peer's delayed-ACK timer fired —
+  `TCP_DELACK_MIN`, which is exactly 40 ms on Linux.
+
+  The engine's latency probe is `GET /__down?bytes=0`. Its response is precisely
+  the small, split write that trips this, so the stall was reported to the user
+  as network latency. Measured on the deployed guest, 25 idle probes each:
+
+  | endpoint                    | before   | after  |
+  |-----------------------------|----------|--------|
+  | `http://…:8080/api/health`  |  0.6 ms  | 0.6 ms |
+  | `https://…/api/health`      | 41.9 ms  | 0.7 ms |
+  | `https://…/__down?bytes=0`  | 38.4 ms  | 0.7 ms |
+
+  Plain HTTP was unaffected only by luck — hyper emitted those responses as a
+  single write. Both listeners are pinned now.
+
+  This is what the "unexplained asymmetric bufferbloat" in the notes actually
+  was. It is invisible on loopback, where the round trip is too short for the
+  acknowledgement to be delayed, which is why every test tier passed
+  throughout. Stored runs from before this fix carry latency figures inflated
+  by the same amount.
+
 ## [1.3.0] - 2026-08-25
 
 Whose run it was, and how to get back to it.
@@ -527,7 +558,8 @@ milestone increments.
 - Tier-4 hardware validation outstanding; releases stay pre-release until it
   passes.
 
-[Unreleased]: https://github.com/sremich/self-hosted-cloudflare-speedtest/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/sremich/self-hosted-cloudflare-speedtest/compare/v1.3.1...HEAD
+[1.3.1]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v1.3.1
 [1.3.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v1.3.0
 [1.2.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v1.2.0
 [1.1.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v1.1.0

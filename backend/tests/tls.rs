@@ -9,7 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use lan_speedtest::{router, AppState, Config, PayloadSource};
+use lan_speedtest::{net, router, AppState, Config, PayloadSource};
 
 const CONFIG: &str = "
 profile = 'test'
@@ -82,7 +82,12 @@ async fn serve_tls(cert: &Path, key: &Path) -> String {
     let addr = std_listener.local_addr().unwrap();
 
     tokio::spawn(async move {
-        axum_server::from_tcp_rustls(std_listener, tls)
+        // Built through the same helper production uses, so this exercises the
+        // acceptor that actually ships rather than a convenience constructor
+        // that differs from it. `from_tcp_rustls` is the one that leaves Nagle
+        // on; see backend/src/net.rs.
+        axum_server::from_tcp(std_listener)
+            .acceptor(net::tls_acceptor(tls))
             .serve(router(state).into_make_service())
             .await
             .unwrap();
