@@ -364,6 +364,9 @@ fn header_value(s: String) -> HeaderValue {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Status {
+    /// What this deployment calls itself. Drives the heading and tab title, so
+    /// two installations on one LAN are tellable apart.
+    site_name: String,
     version: &'static str,
     git_sha: &'static str,
     profile: String,
@@ -380,6 +383,7 @@ struct Status {
 
 async fn status(State(state): State<AppState>, client: ClientAddr) -> impl IntoResponse {
     axum::Json(Status {
+        site_name: state.config.server.site_name.clone(),
         version: VERSION,
         git_sha: GIT_SHA,
         profile: state.config.profile.clone(),

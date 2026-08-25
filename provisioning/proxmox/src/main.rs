@@ -243,6 +243,11 @@ fn deploy_env(cfg: &Config, secrets: Option<&Secrets>, listen_ip: &str) -> Strin
         // so the path in the container is unambiguous against the bind mount.
         "SPEEDTEST_HISTORY_DB=/app/data/history.db".to_string(),
     ];
+    // Omitted entirely when unset, so the shipped config's own default wins
+    // rather than being overridden with a blank.
+    if let Some(name) = &cfg.guest.site_name {
+        lines.push(format!("SPEEDTEST_SITE_NAME={}", name.trim()));
+    }
     match secrets {
         Some(s) => {
             // TLS is configured only alongside the certificate we just issued.

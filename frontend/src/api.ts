@@ -10,6 +10,8 @@
 import type { MeasurementConfig } from '@cloudflare/speedtest';
 
 export interface Status {
+  /** What this deployment calls itself: the heading and the tab title. */
+  siteName: string;
   version: string;
   gitSha: string;
   profile: string;

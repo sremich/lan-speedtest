@@ -77,6 +77,7 @@ most one sample inside a short LAN transfer, and jitter needs two.
 
 | Key | Default | Meaning |
 |---|---|---|
+| `site_name` | `LAN Speed Test` | Page heading and browser tab title |
 | `bind` | `0.0.0.0:8080` | Listen address inside the container |
 | `max_transfer_bytes` | 2 GiB | Hard per-request ceiling. Startup fails if a profile exceeds it |
 | `download_chunk_bytes` | 4 MiB | Shared payload buffer, sliced per request |
@@ -106,6 +107,7 @@ See [TURN and Packet Loss](TURN-and-Packet-Loss.md).
 |---|---|
 | `SPEEDTEST_CONFIG` | Path to the TOML file |
 | `SPEEDTEST_PROFILE` | `profile` |
+| `SPEEDTEST_SITE_NAME` | `server.site_name` |
 | `SPEEDTEST_BIND` | `server.bind` |
 | `SPEEDTEST_STATIC_DIR` | `server.static_dir` |
 | `SPEEDTEST_TURN_ENABLED` | `turn.enabled` |
@@ -115,4 +117,32 @@ See [TURN and Packet Loss](TURN-and-Packet-Loss.md).
 | `SPEEDTEST_LOG` | Log filter (`info`, `debug`, …) |
 
 Unknown keys in the TOML file are a hard error rather than being ignored — a
-typo must not leave you believing a setting took effect.
+typo must not leave you believing a setting took effect. The one exception is
+`site_name`: a blank value falls back to the default rather than rendering an
+empty heading, because refusing to boot over a cosmetic string would be worse
+than the mistake.
+
+## Naming a deployment
+
+The heading and tab title come from the server, not from the built bundle, so
+one image can serve several installations and renaming one needs a restart
+rather than a rebuild. Two of these on the same LAN are otherwise
+indistinguishable in a browser tab.
+
+```sh
+# On the guest, in /opt/speedtest
+echo 'SPEEDTEST_SITE_NAME=Rack Room Speed Test' >> .env
+docker compose up -d
+```
+
+Provisioned deployments set it from `provision.toml` instead, which survives a
+rebuild:
+
+```toml
+[guest]
+site_name = "Rack Room Speed Test"
+```
+
+The name is written into a compose `env_file`, which has no quoting, so a
+newline or a `#` is rejected at validation rather than silently truncating the
+name on the guest.

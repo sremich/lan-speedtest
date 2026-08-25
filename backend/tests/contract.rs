@@ -283,6 +283,32 @@ async fn status_exposes_version_and_git_sha() {
     assert!(v["version"].is_string());
     assert!(v["gitSha"].is_string());
     assert_eq!(v["profile"], "test");
+    assert_eq!(
+        v["siteName"], "LAN Speed Test",
+        "an unnamed deployment still needs something to put in the heading"
+    );
+}
+
+#[tokio::test]
+async fn status_carries_the_configured_site_name() {
+    // The heading is decided server-side so that renaming an installation is
+    // a config change and a restart, not a rebuild.
+    let base = serve(&CONFIG.replace(
+        "[server]",
+        "[server]
+site_name = 'Rack Room'",
+    ))
+    .await;
+    let v: serde_json::Value = client()
+        .get(format!("{base}/api/status"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    assert_eq!(v["siteName"], "Rack Room");
 }
 
 #[tokio::test]

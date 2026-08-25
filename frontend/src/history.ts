@@ -7,6 +7,7 @@
  */
 
 import './styles.css';
+import { fetchStatus } from './api';
 import { formatBandwidth, formatLatency, formatPacketLoss } from './format';
 
 interface StoredRun {
@@ -40,7 +41,11 @@ const el = <T extends HTMLElement>(id: string): T => {
   return node as T;
 };
 
+/** The most recent load, kept so a resize can redraw without refetching. */
+let lastRuns: StoredRun[] = [];
+
 const ui = {
+  title: el('page-title'),
   chart: el('chart'),
   rows: el('rows'),
   clientFilter: el<HTMLSelectElement>('client-filter'),
@@ -81,6 +86,19 @@ function formatWhen(iso: string): string {
  * rather than by timestamp: runs are irregular and sparse, and an index axis
  * keeps every point visible instead of bunching a week of tests into one pixel.
  */
+/**
+ * The drawing width, in CSS pixels.
+ *
+ * `clientWidth` is zero for a detached or hidden element, so fall back rather
+ * than emitting a chart of width zero.
+ */
+function chartWidth(): number {
+  const style = getComputedStyle(ui.chart);
+  const inner =
+    ui.chart.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+  return Math.max(360, Math.round(Number.isFinite(inner) && inner > 0 ? inner : 900));
+}
+
 function renderChart(runs: StoredRun[]): void {
   const series = [...runs].reverse();
   const usable = series.filter((r) => r.download !== null || r.upload !== null);
@@ -91,8 +109,12 @@ function renderChart(runs: StoredRun[]): void {
     return;
   }
 
-  const W = 900;
-  const H = 260;
+  // Drawn at the container's real pixel width rather than at a fixed viewBox
+  // scaled to fit, which would scale the tick labels along with it — tiny in a
+  // narrow window, oversized on a wide monitor. `chartWidth` is remeasured on
+  // resize; see the listener at the foot of this file.
+  const W = chartWidth();
+  const H = Math.round(Math.min(320, Math.max(200, W * 0.3)));
   // The left gutter has to fit the widest tick label. At 56 it silently
   // clipped "250.0 Mbps" down to "50.0 Mbps", which is not a cosmetic bug —
   // the chart read as an order of magnitude slower than it was.
@@ -141,7 +163,7 @@ function renderChart(runs: StoredRun[]): void {
       .join('');
 
   ui.chart.innerHTML = `
-    <svg viewBox="0 0 ${W} ${H}" class="chart__svg" role="img"
+    <svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" class="chart__svg" role="img"
          aria-label="Download and upload bandwidth over the most recent runs">
       ${gridLines}
       <path d="${path('download')}" class="chart__line chart__line--down" />
@@ -225,6 +247,7 @@ async function load(): Promise<void> {
   const runs = (await res.json()) as StoredRun[];
 
   ui.count.textContent = runs.length === 1 ? '1 run' : `${runs.length} runs`;
+  lastRuns = runs;
   renderChart(runs);
   renderRows(runs);
   document.body.dataset.historyState = 'loaded';
@@ -250,13 +273,46 @@ ui.clientFilter.addEventListener('change', () => {
   void load().catch(showError);
 });
 
+/**
+ * Redraw on resize.
+ *
+ * The chart is sized in real pixels, so it has to be re-rendered when the
+ * window changes rather than being stretched. Debounced, because a drag
+ * generates a resize event per frame.
+ */
+let resizeTimer: ReturnType<typeof setTimeout> | undefined;
+window.addEventListener('resize', () => {
+  if (resizeTimer !== undefined) clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    if (lastRuns.length > 0) renderChart(lastRuns);
+  }, 120);
+});
+
 function showError(e: unknown): void {
   ui.error.textContent = e instanceof Error ? e.message : String(e);
   ui.error.hidden = false;
   document.body.dataset.historyState = 'error';
 }
 
+/**
+ * Names the page after the deployment.
+ *
+ * Best-effort and deliberately not awaited with the rest: a failure here is
+ * cosmetic, and should not stop the history itself from loading.
+ */
+async function applySiteName(): Promise<void> {
+  try {
+    const name = (await fetchStatus()).siteName.trim();
+    if (!name) return;
+    ui.title.textContent = `${name} — History`;
+    document.title = `History — ${name}`;
+  } catch {
+    /* keep the shipped heading */
+  }
+}
+
 void (async () => {
+  void applySiteName();
   try {
     await loadClients();
     await load();

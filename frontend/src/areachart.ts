@@ -28,6 +28,15 @@ const W = 600;
 const H = 150;
 const PAD = { top: 12, right: 6, bottom: 6, left: 6 };
 
+/** Escapes text destined for HTML. */
+function esc(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 /**
  * Renders samples as SVG markup, or an empty string when there is nothing yet
  * to draw — a caller should leave the space blank rather than show an axis
@@ -57,28 +66,43 @@ export function renderAreaChart(samples: readonly number[], opts: AreaChartOptio
     1,
   )} L${x(0).toFixed(1)},${(PAD.top + plotH).toFixed(1)} Z`;
 
-  let markerMarkup = '';
+  // The card stretches this drawing to whatever width and height it has, so
+  // the marker LINE can live in the SVG (a stroke is scale-independent given
+  // `vector-effect`) but its LABEL cannot: text inside a
+  // `preserveAspectRatio="none"` viewBox is squashed by whatever the current
+  // aspect ratio happens to be, which made it unreadable in a narrow window
+  // and oversized in a wide one. Position the label as HTML instead, where a
+  // CSS font size means what it says at every window size.
+  let markerLine = '';
+  let markerLabel = '';
   if (opts.marker && opts.marker.value > 0) {
     const my = y(opts.marker.value);
-    markerMarkup = `
-      <line x1="${PAD.left}" y1="${my.toFixed(1)}" x2="${W - PAD.right}" y2="${my.toFixed(1)}"
-            class="trace__marker" />
-      <text x="${PAD.left + 2}" y="${(my - 4).toFixed(1)}" class="trace__marker-label">${
-        opts.marker.label
-      }</text>`;
+    markerLine = `<line x1="${PAD.left}" y1="${my.toFixed(1)}" x2="${W - PAD.right}" y2="${my.toFixed(
+      1,
+    )}" class="trace__marker" />`;
+    // The label sits above its line, so a marker near the top of a short
+    // chart would push it out of the card. 18% clears one line of text at the
+    // smallest height `--trace-h` allows.
+    const top = Math.min(97, Math.max(18, (my / H) * 100));
+    markerLabel = `<span class="trace__marker-label" style="top: ${top.toFixed(2)}%">${esc(
+      opts.marker.label,
+    )}</span>`;
   }
 
-  return `<svg viewBox="0 0 ${W} ${H}" class="trace__svg" preserveAspectRatio="none"
-               role="img" aria-label="Bandwidth over the course of the test">
-    <defs>
-      <linearGradient id="${opts.id}" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0%" stop-color="${opts.colour}" stop-opacity="0.45" />
-        <stop offset="100%" stop-color="${opts.colour}" stop-opacity="0.02" />
-      </linearGradient>
-    </defs>
-    <path d="${area}" fill="url(#${opts.id})" stroke="none" />
-    <path d="${line}" fill="none" stroke="${opts.colour}" stroke-width="1.5"
-          stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke" />
-    ${markerMarkup}
-  </svg>`;
+  return `<div class="trace__plot">
+    <svg viewBox="0 0 ${W} ${H}" class="trace__svg" preserveAspectRatio="none"
+         role="img" aria-label="Bandwidth over the course of the test">
+      <defs>
+        <linearGradient id="${opts.id}" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="${opts.colour}" stop-opacity="0.45" />
+          <stop offset="100%" stop-color="${opts.colour}" stop-opacity="0.02" />
+        </linearGradient>
+      </defs>
+      <path d="${area}" fill="url(#${opts.id})" stroke="none" />
+      <path d="${line}" fill="none" stroke="${opts.colour}" stroke-width="1.5"
+            stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke" />
+      ${markerLine}
+    </svg>
+    ${markerLabel}
+  </div>`;
 }

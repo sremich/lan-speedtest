@@ -16,6 +16,16 @@ export interface BoxPlotOptions {
   format: (value: number) => string;
   /** Force the axis to start at zero. Right for bandwidth, wrong for latency. */
   zeroBased?: boolean;
+  /**
+   * Drawing width in CSS pixels — normally the container's measured width.
+   *
+   * A fixed viewBox scaled to fit by CSS would scale the *text* and the row
+   * heights along with it, so the same plot rendered as cramped 8px labels in
+   * a narrow window and bloated 20px ones on a wide monitor. Drawing at the
+   * real pixel width keeps one row 34px tall and one label 11px whatever the
+   * window is doing.
+   */
+  width?: number;
 }
 
 const ROW_H = 34;
@@ -23,7 +33,10 @@ const ROW_H = 34;
 export const MIN_BOX_W = 2;
 const LABEL_W = 96;
 const PAD = { top: 10, right: 16, bottom: 26 };
-const W = 760;
+/** Used when no container width is known, e.g. in unit tests. */
+export const DEFAULT_W = 760;
+/** Below this the axis labels start colliding, so stop shrinking and scroll. */
+const MIN_W = 360;
 
 /** Escapes text destined for an SVG attribute or text node. */
 function esc(s: string): string {
@@ -43,6 +56,7 @@ function esc(s: string): string {
 export function renderBoxPlots(rows: Distribution[], opts: BoxPlotOptions): string {
   if (rows.length === 0) return '';
 
+  const W = Math.max(MIN_W, Math.round(opts.width ?? DEFAULT_W));
   const H = PAD.top + rows.length * ROW_H + PAD.bottom;
   const plotL = LABEL_W;
   const plotW = W - plotL - PAD.right;
@@ -135,7 +149,10 @@ export function renderBoxPlots(rows: Distribution[], opts: BoxPlotOptions): stri
     })
     .join('');
 
-  return `<svg viewBox="0 0 ${W} ${H}" class="box__svg" role="img"
+  // Explicit pixel dimensions, not just a viewBox: they are what hold the
+  // scale factor at 1. CSS caps the width so an over-generous measurement
+  // shrinks the drawing rather than overflowing the card.
+  return `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" class="box__svg" role="img"
                aria-label="Distribution of samples per measurement">
     ${ticks}
     ${body}

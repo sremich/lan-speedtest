@@ -57,6 +57,10 @@ export default defineConfig({
             // fast a runner's loopback is. Throughput is asserted in
             // backend/tests/throughput.rs.
             SPEEDTEST_PROFILE: 'quick',
+            // Deliberately not the value hard-coded in index.html, so the
+            // naming test proves the heading came from the server rather
+            // than passing on the static fallback.
+            SPEEDTEST_SITE_NAME: 'e2e Speed Test',
             SPEEDTEST_STATIC_DIR: 'dist',
             // History off by default; the history suite starts its own backend
             // with a database so runs from one suite cannot leak into another.

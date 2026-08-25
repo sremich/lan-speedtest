@@ -24,6 +24,13 @@
 
   --radius: 10px;
   --gap: 16px;
+  /* Wide enough for three headline columns on a desktop, narrow enough that
+     the detail tables stay a readable measure on a 4K monitor. */
+  --page-max: 1320px;
+  /* The live traces grow with the window rather than staying a fixed sliver:
+     a tall window shows more of the shape of a run, which is the whole point
+     of drawing it. */
+  --trace-h: clamp(88px, 13vh, 168px);
   --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-num: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
 }
@@ -41,7 +48,7 @@ body {
 }
 
 .page {
-  max-width: 940px;
+  width: min(100%, var(--page-max));
   margin: 0 auto;
   padding: clamp(16px, 4vw, 40px);
   display: flex;
@@ -126,13 +133,23 @@ body {
 
 .headline {
   display: grid;
-  grid-template-columns: 1fr 1fr minmax(210px, 0.62fr);
+  /* minmax(0, ...) rather than 1fr: a grid track's default minimum is its
+     content, so a wide SVG would push the column out and overflow the page
+     instead of shrinking. */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(230px, 0.58fr);
   gap: var(--gap);
   align-items: stretch;
 }
 
-@media (max-width: 900px) {
-  .headline { grid-template-columns: 1fr; }
+/* Below three comfortable columns the vitals drop under the traces and lay
+   themselves out in a row. Stacking everything here instead would give up the
+   side-by-side download/upload comparison far earlier than it needs to. */
+@media (max-width: 1100px) {
+  .headline { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}
+
+@media (max-width: 620px) {
+  .headline { grid-template-columns: minmax(0, 1fr); }
 }
 
 .trace,
@@ -184,12 +201,18 @@ body {
 .trace__chart {
   margin-top: auto;
   padding-top: 10px;
-  min-height: 96px;
+}
+
+/* Positioning context for the marker label, which is HTML rather than SVG
+   text — see areachart.ts. */
+.trace__plot {
+  position: relative;
+  height: var(--trace-h);
 }
 
 .trace__svg {
   width: 100%;
-  height: 96px;
+  height: 100%;
   display: block;
 }
 
@@ -200,10 +223,18 @@ body {
   opacity: 0.7;
 }
 
+/* Sits just above its line. A CSS font size here means what it says at every
+   window width, which SVG text inside a stretched viewBox does not. */
 .trace__marker-label {
-  fill: var(--text-dim);
-  font-size: 9px;
+  position: absolute;
+  left: 4px;
+  transform: translateY(-100%);
+  padding-bottom: 2px;
+  font-size: 0.65rem;
   font-family: var(--font-num);
+  color: var(--text-dim);
+  white-space: nowrap;
+  pointer-events: none;
 }
 
 /* --- vitals column -------------------------------------------------------- */
@@ -251,6 +282,33 @@ body {
   font-size: 0.7rem;
   color: var(--text-dim);
   font-family: var(--font-num);
+}
+
+/* Once the vitals sit under the traces rather than beside them they have a
+   full row to use, so lay them out across it instead of leaving a tall column
+   of whitespace. This block has to come after the rules above rather than
+   living with the `.headline` breakpoint — same specificity, so source order
+   decides. */
+@media (max-width: 1100px) {
+  .vitals {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 14px var(--gap);
+    align-items: start;
+  }
+
+  .vital__meta {
+    grid-column: 1 / -1;
+    margin: 0;
+  }
+}
+
+/* Single column: back to a stack, where a row of three would be 100px wide. */
+@media (max-width: 620px) {
+  .vitals {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 /* --- packet-loss bar ------------------------------------------------------ */
@@ -324,6 +382,9 @@ body {
 
 .note {
   margin: 0;
+  /* Prose stops widening well before the charts do; a 1300px line of 13px
+     text is unreadable. */
+  max-width: 80ch;
   font-size: 0.8rem;
   line-height: 1.5;
   color: var(--text-dim);
@@ -368,8 +429,9 @@ body {
   padding: 16px;
 }
 
+/* As with the box plots: drawn at a measured pixel width, capped here. */
 .chart__svg {
-  width: 100%;
+  max-width: 100%;
   height: auto;
   display: block;
 }
@@ -510,8 +572,11 @@ body {
   color: var(--text-dim);
 }
 
+/* Sized in real pixels by the renderer, so the labels stay 11px whatever the
+   window is doing. `max-width` is the safety net: if the measurement is stale
+   after a resize, the drawing shrinks rather than overflowing its card. */
 .box__svg {
-  width: 100%;
+  max-width: 100%;
   height: auto;
   display: block;
   overflow: visible;

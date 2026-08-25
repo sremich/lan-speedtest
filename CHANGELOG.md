@@ -8,6 +8,144 @@ commit, then tag.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-08-25
+
+A name of its own, and a layout that survives being resized.
+
+### Added
+
+- **The deployment names itself.** The page heading and the browser tab title
+  come from `server.site_name`, overridable with `SPEEDTEST_SITE_NAME` and
+  settable from `provision.toml` as `guest.site_name`. Two of these on one LAN
+  were otherwise indistinguishable in a tab strip, and the name was previously
+  hard-coded into the bundle — so renaming an installation meant a rebuild.
+
+  Provisioning rejects a name containing a newline or a `#`. The value lands in
+  a compose `env_file`, which has no quoting: a newline would inject an
+  unrelated variable and a `#` can start a comment, so the guest would come up
+  named something nobody asked for.
+
+  A blank name falls back to the default rather than refusing to boot.
+  Everything else in the config file fails loudly on a bad value; this one is
+  cosmetic enough that an empty heading is the worse outcome.
+
+### Changed
+
+- **The layout scales with the window instead of sitting in a fixed column.**
+  The page now widens to 1320px, and the headline moves through three
+  arrangements rather than one: two traces beside a vitals column on a desktop,
+  two traces above a row of vitals on a laptop, and a single stack on a phone.
+  The download and upload cards stay side by side down to 620px, which is where
+  the comparison between them stops being readable anyway. The live traces
+  take their height from the viewport, so a tall window shows more of the shape
+  of a run.
+
+- **Charts are drawn at their real pixel size.** The box plots and the history
+  trend previously used a fixed drawing scaled to fit, which scaled their text
+  and row heights along with it — the same plot rendered 6px labels in a narrow
+  window and 17px ones on a wide monitor. They are now measured and drawn to
+  the container's actual width, and redraw on resize. The 90th-percentile
+  marker label moved out of the stretched trace SVG into HTML for the same
+  reason: text inside a `preserveAspectRatio="none"` viewBox is squashed by
+  whatever the current aspect ratio happens to be.
+
+  An end-to-end test now walks four viewports from 390px to 1920px and asserts
+  that nothing overflows horizontally, that the drawings are never stretched,
+  and that a label is the same size at every one of them.
+
+## [1.0.0] - 2026-08-25
+
+The first full release: deployed, serving, and no longer a pre-release.
+
+### Added
+
+- **Live bandwidth traces.** Each direction is drawn as a filled area over its
+  samples as they arrive, with the reported 90th percentile marked. A headline
+  percentile says what the link did on average; the shape says whether it
+  climbed and held or spiked and collapsed, and only the second is a problem.
+
+- **Per-direction loaded latency and jitter**, shown inline with ↓/↑ markers
+  rather than as separate cards, plus packet loss as a received bar, sample
+  counts on every distribution label, a pause/resume control, a measured-at
+  timestamp, and the client's own address in the footer.
+
+  The sample counts matter more than they look: a distribution drawn from two
+  samples deserves less trust than one drawn from twenty, and the reader had no
+  way to tell which they were looking at.
+
+### Changed
+
+- The results page follows the current speed.cloudflare.com layout.
+
+### Deployed
+
+- Running on the deployment guest with an auto-renewing wildcard certificate, coturn for
+  the packet-loss stage, and history enabled. Packet loss confirmed at 0% from
+  a browser on the LAN.
+
+### Not included
+
+- **No server-location map.** The reference site shows one; map tiles come from
+  an external host, which is the single thing this project must not do, and the
+  end-to-end origin test would fail on it — correctly. On a LAN the useful half
+  of that panel is knowing which machine you are testing from, so the client
+  address is shown instead.
+
+- The 10 GbE saturation check that originally gated 1.0.0 is waived at
+  the maintainer's request. The criterion behind it had already been restated as "the
+  backend is provably not the bottleneck", which CI covers at 34-51 Gbps over
+  loopback. The other tier-4 item is not waived: "no external traffic" is
+  proven on every push by a test that drives a full run in a real browser and
+  fails if one request leaves the origin.
+
+## [0.6.1] - 2026-08-25
+
+Nine fixes from the first live provisioning run, none of which the mocked suite
+could have caught. Mocks assert on the commands issued; they cannot observe
+file ownership, uid/gid arithmetic, what a daemon does when it cannot write its
+log, or how a tool encodes its own config.
+
+### Security
+
+- **A failed `pct exec` echoed its command verbatim**, including a leading
+  `TURN_PASS` assignment. Credentials are now redacted at that boundary rather
+  than relying on each call site to be careful. The first attempt was defeated
+  by shell-escaped quotes, so the scanner understands quote continuation.
+
+### Fixed
+
+- **The ACME reload hook aborted provisioning before the renewal cron was
+  installed**, leaving a valid certificate with nothing to renew it — precisely
+  the state the predecessor host is in.
+- **Certificate permissions.** Written `root:root 0600` while the service runs
+  unprivileged, and rewritten by acme.sh on every renewal, so fixing it once
+  would have failed again about ninety days later. Applied at install and
+  re-applied by the hook.
+- **The image's gid did not match its uid**, because `useradd --uid` lets the
+  distribution pick any free gid — defeating group-readable mounts.
+- **A bind mount shadowed the image's data directory** and Docker created the
+  host side as root, crash-looping the unprivileged service.
+- **coturn logged nowhere at all**: it drops to a user that cannot write under
+  `/var/log`, and `no-stdout-log` suppressed the fallback.
+- **coturn ran on defaults for hours** because its config was `root:root 0600`
+  and coturn drops privileges before reading it. It now fails rather than
+  degrading — a daemon that quietly falls back to defaults is worse than one
+  that exits.
+- Three diagnostics that lied: a false "reload hook not configured" warning
+  from grepping base64, a placeholder check tripping on its own explanatory
+  comment, and CRLF line endings turning `set -euo pipefail` into an invalid
+  option with a message naming neither the file nor line endings.
+- **Box-plot whiskers could be drawn inside their own box.** With few samples
+  and an extreme outlier the quartile can lie beyond the last non-outlier
+  sample. Whiskers are clamped to the box, so the invariant holds by
+  construction rather than by tolerance.
+
+### Changed
+
+- `provision.toml` is gitignored with a committed example. It names the
+  hypervisor and the guest address, which is internal topology this repository
+  should not carry.
+
 ## [0.6.0] - 2026-08-25
 
 The detail view, and raw throughput as a separate number.
@@ -252,7 +390,8 @@ milestone increments.
 - Tier-4 hardware validation outstanding; releases stay pre-release until it
   passes.
 
-[Unreleased]: https://github.com/sremich/self-hosted-cloudflare-speedtest/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/sremich/self-hosted-cloudflare-speedtest/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v1.1.0
 [1.0.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v1.0.0
 [0.6.1]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v0.6.1
 [0.6.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v0.6.0

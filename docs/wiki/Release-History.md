@@ -4,6 +4,20 @@ Versions are three-part `X.Y.Z`. While the major version is 0, every release is
 a GitHub pre-release — tier-4 validation (10 GbE saturation and a packet
 capture proving no external traffic) gates 1.0.0.
 
+## 1.1.0
+
+A name of its own, and a layout that survives being resized.
+
+- The heading and tab title come from `server.site_name`
+  (`SPEEDTEST_SITE_NAME`, or `guest.site_name` in `provision.toml`), so two
+  installations on one LAN are tellable apart and renaming one is a restart
+  rather than a rebuild.
+- The page widens to 1320px, and the headline moves through three arrangements
+  instead of one. The two bandwidth cards stay side by side down to 620px.
+- Charts are drawn at their real pixel size rather than scaled to fit, which
+  had been scaling their labels along with them — the same plot rendered 6px
+  text in a narrow window and 17px on a wide monitor.
+
 ## 1.0.0
 
 Running in production, with the interface reworked against the current

@@ -15,6 +15,10 @@
 profile = "lan-1g"
 
 [server]
+# What this deployment calls itself: the page heading and the browser tab
+# title. Override with SPEEDTEST_SITE_NAME to rename an installation without
+# touching this file. Restart to pick up a change.
+site_name = "LAN Speed Test"
 bind = "0.0.0.0:8080"
 # Hard ceiling on a single transfer. Startup fails if a profile exceeds it.
 max_transfer_bytes = 2147483648

@@ -14,6 +14,9 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+/// Shown when nothing names this deployment. Deliberately generic: the point
+/// of the setting is that an operator replaces it.
+const DEFAULT_SITE_NAME: &str = "LAN Speed Test";
 /// Default TCP port. 8080 inside the container; TLS termination and 443 are
 /// handled outside it.
 const DEFAULT_BIND: &str = "0.0.0.0:8080";
@@ -39,6 +42,14 @@ pub struct Config {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServerConfig {
+    /// Display name for this deployment: the page heading and the browser
+    /// tab title.
+    ///
+    /// Runtime rather than build-time, so renaming an installation needs
+    /// neither a rebuild nor a new image — set `SPEEDTEST_SITE_NAME` (or edit
+    /// this) and restart. One image can therefore serve several sites.
+    #[serde(default = "default_site_name")]
+    pub site_name: String,
     #[serde(default = "default_bind")]
     pub bind: String,
     #[serde(default = "default_max_transfer_bytes")]
@@ -72,6 +83,7 @@ pub struct ServerConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
+            site_name: default_site_name(),
             bind: default_bind(),
             max_transfer_bytes: default_max_transfer_bytes(),
             download_chunk_bytes: default_download_chunk_bytes(),
@@ -171,6 +183,9 @@ pub struct Measurement {
     pub connection_timeout: Option<u32>,
 }
 
+fn default_site_name() -> String {
+    DEFAULT_SITE_NAME.to_string()
+}
 fn default_bind() -> String {
     DEFAULT_BIND.to_string()
 }
@@ -261,6 +276,9 @@ impl Config {
         if let Some(v) = non_empty_env("SPEEDTEST_PROFILE") {
             self.profile = v;
         }
+        if let Some(v) = non_empty_env("SPEEDTEST_SITE_NAME") {
+            self.server.site_name = v;
+        }
         if let Some(v) = non_empty_env("SPEEDTEST_BIND") {
             self.server.bind = v;
         }
@@ -292,6 +310,21 @@ impl Config {
         }
         if let Some(v) = non_empty_env("SPEEDTEST_TURN_ENABLED") {
             self.turn.enabled = matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes");
+        }
+
+        self.normalise_site_name();
+    }
+
+    /// Trims the display name, and refuses to leave it blank.
+    ///
+    /// A blank name is a mistake rather than an instruction to render an empty
+    /// heading, and it is cosmetic enough not to be worth refusing to boot
+    /// over. Everything else in this file fails loudly; this one falls back on
+    /// purpose.
+    fn normalise_site_name(&mut self) {
+        self.server.site_name = self.server.site_name.trim().to_string();
+        if self.server.site_name.is_empty() {
+            self.server.site_name = default_site_name();
         }
     }
 
@@ -493,6 +526,36 @@ measurements = [
                 );
             }
         }
+    }
+
+    #[test]
+    fn site_name_comes_from_config_and_falls_back_when_blank() {
+        let c = parse(MINIMAL);
+        assert_eq!(c.server.site_name, DEFAULT_SITE_NAME);
+
+        let mut named: Config = toml::from_str(&format!(
+            "{MINIMAL}
+[server]
+site_name = '  Rack Room Speed Test  '
+"
+        ))
+        .unwrap();
+        named.normalise_site_name();
+        assert_eq!(
+            named.server.site_name, "Rack Room Speed Test",
+            "surrounding whitespace should not reach the heading"
+        );
+
+        // Blank must not render an empty <h1>.
+        let mut blank: Config = toml::from_str(&format!(
+            "{MINIMAL}
+[server]
+site_name = '   '
+"
+        ))
+        .unwrap();
+        blank.normalise_site_name();
+        assert_eq!(blank.server.site_name, DEFAULT_SITE_NAME);
     }
 
     #[test]

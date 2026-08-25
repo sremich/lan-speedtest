@@ -79,6 +79,13 @@ pub struct Guest {
     /// Which `[profiles.*]` in config/speedtest.toml the deployed service runs.
     #[serde(default = "default_measurement_profile")]
     pub measurement_profile: String,
+    /// What the deployed service calls itself in the browser.
+    ///
+    /// Unset leaves the shipped default in place. Written into the guest's
+    /// `.env` as `SPEEDTEST_SITE_NAME`, so changing it here and re-running
+    /// `apply` renames the site.
+    #[serde(default)]
+    pub site_name: Option<String>,
     /// Public key installed for root on the guest, so it is reachable by SSH.
     ///
     /// Installed on every run rather than only at creation: `pct create` takes
@@ -168,6 +175,20 @@ impl Config {
                 self.guest.ostemplate
             );
         }
+        // The name is written into a compose `env_file`, which is parsed
+        // line by line with no quoting. A newline would inject an unrelated
+        // variable; a '#' can start a comment. Reject both here rather than
+        // producing a guest that boots with a silently truncated name.
+        if let Some(name) = &self.guest.site_name {
+            if name.trim().is_empty() {
+                anyhow::bail!("site_name is set but blank — remove it to keep the default");
+            }
+            if let Some(bad) = name.chars().find(|c| matches!(c, '\n' | '\r' | '#')) {
+                anyhow::bail!(
+                    "site_name {name:?} contains {bad:?}, which a compose env_file cannot carry"
+                );
+            }
+        }
         if self.guest.unprivileged && !self.guest.features.contains("nesting=1") {
             anyhow::bail!(
                 "features {:?} lacks nesting=1, which Docker needs in an unprivileged container",
@@ -199,6 +220,7 @@ mod tests {
             onboot: true,
             extra_tags: vec![],
             measurement_profile: default_measurement_profile(),
+            site_name: None,
             ssh_authorized_key: default_authorized_key(),
         }
     }
@@ -267,6 +289,25 @@ mod tests {
             },
             guest,
         }
+    }
+
+    #[test]
+    fn validation_rejects_a_site_name_a_compose_env_file_cannot_carry() {
+        // The name lands in an env_file, which has no quoting: a newline would
+        // inject an unrelated variable and a '#' can start a comment, so the
+        // guest would come up with a name nobody asked for.
+        for bad in ["Rack\nSPEEDTEST_TURN_ENABLED=false", "Rack #1", "   "] {
+            let mut g = guest();
+            g.site_name = Some(bad.into());
+            assert!(
+                cfg_with(g).validate().is_err(),
+                "site_name {bad:?} should be rejected"
+            );
+        }
+
+        let mut g = guest();
+        g.site_name = Some("Rack Room Speed Test".into());
+        assert!(cfg_with(g).validate().is_ok());
     }
 
     #[test]

@@ -30,6 +30,15 @@ let lastDownloadBps: number | undefined;
 /** The running engine, so the pause control can reach it. */
 let currentEngine: Engine | undefined;
 
+/**
+ * The most recent results, so a window resize can redraw the box plots.
+ *
+ * They are drawn at a real pixel width rather than being stretched by the
+ * browser, which is what keeps their labels legible at any window size — but
+ * it does mean a resize needs a redraw rather than doing nothing.
+ */
+let lastResults: Results | undefined;
+
 const el = <T extends HTMLElement>(id: string): T => {
   const node = document.getElementById(id);
   if (!node) throw new Error(`missing element #${id}`);
@@ -37,6 +46,7 @@ const el = <T extends HTMLElement>(id: string): T => {
 };
 
 const ui = {
+  siteName: el('site-name'),
   phase: el('phase'),
   restart: el<HTMLButtonElement>('restart'),
   progress: el('progress'),
@@ -99,7 +109,21 @@ function clearError(): void {
   ui.error.textContent = '';
 }
 
+/**
+ * Names the page after the deployment.
+ *
+ * Server-side rather than baked into the bundle, so two installations on one
+ * LAN are tellable apart and a rename is a restart rather than a rebuild.
+ */
+function applySiteName(name: string): void {
+  const trimmed = name.trim();
+  if (!trimmed) return;
+  ui.siteName.textContent = trimmed;
+  document.title = trimmed;
+}
+
 function render(results: Results, final = false): void {
+  lastResults = results;
   const summary = results.getSummary();
 
   lastDownloadBps = summary.download;
@@ -180,6 +204,19 @@ function ms(value: number): string {
  * consistent a run was — and consistency is exactly what exposes a failing
  * cable or a duplex mismatch. These show every sample the engine collected.
  */
+/**
+ * The width the box plots should be drawn at, in CSS pixels.
+ *
+ * A collapsed `<details>` reports zero, so fall back rather than emitting a
+ * drawing of width zero.
+ */
+function detailWidth(): number {
+  const style = getComputedStyle(ui.detailBody);
+  const inner =
+    ui.detailBody.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+  return Number.isFinite(inner) && inner > 0 ? inner : 760;
+}
+
 function renderDetail(results: Results): void {
   const groups: Array<{ title: string; rows: Distribution[]; format: (v: number) => string }> = [];
   let packetLossBar = '';
@@ -237,6 +274,7 @@ function renderDetail(results: Results): void {
     return;
   }
 
+  const width = detailWidth();
   ui.detailBody.innerHTML =
     groups
       .map(
@@ -245,6 +283,7 @@ function renderDetail(results: Results): void {
           ${renderBoxPlots(g.rows, {
             format: g.format,
             zeroBased: g.format === bps,
+            width,
           })}
         </div>`,
       )
@@ -322,6 +361,7 @@ async function run(): Promise<void> {
 
   const [status, profile] = await Promise.all([fetchStatus(), fetchProfile()]);
 
+  applySiteName(status.siteName);
   ui.profile.textContent = `profile: ${profile.profile}${
     profile.description ? ` (${profile.description})` : ''
   }`;
@@ -456,6 +496,20 @@ ui.pause.addEventListener('click', () => {
     engine.play();
     ui.pause.textContent = 'Pause';
   }
+});
+
+/**
+ * Redraw the pixel-sized drawings when the window changes.
+ *
+ * Debounced: a window drag fires a resize event per frame, and re-rendering
+ * the detail panel that often is wasted work.
+ */
+let resizeTimer: ReturnType<typeof setTimeout> | undefined;
+window.addEventListener('resize', () => {
+  if (resizeTimer !== undefined) clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    if (lastResults) renderDetail(lastResults);
+  }, 120);
 });
 
 ui.restart.addEventListener('click', () => {

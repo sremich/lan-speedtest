@@ -361,6 +361,91 @@ test('the run reports when it was measured and from where', async ({ page }) => 
   await expect(page.getByTestId('connection')).toContainText(/client: \S+/);
 });
 
+test('the page is named by the server, so a deployment can be renamed', async ({ page }) => {
+  // The name lives in server config rather than in this bundle: two of these
+  // on one LAN need to be tellable apart, and renaming one should be a
+  // restart rather than a rebuild.
+  await page.goto('/');
+
+  const status = await page.evaluate(async () => {
+    const res = await fetch('/api/status', { cache: 'no-store' });
+    return (await res.json()) as { siteName: string };
+  });
+  expect(status.siteName, 'the backend must name itself').not.toBe('');
+
+  await expect(page.getByTestId('site-name')).toHaveText(status.siteName);
+  await expect.poll(async () => page.title()).toBe(status.siteName);
+});
+
+test('the layout scales from a phone to a wide monitor', async ({ page }) => {
+  // Two failures this catches: content wider than the window (a horizontal
+  // scrollbar on the whole page), and drawings scaled to fit rather than drawn
+  // to size, which shrinks and grows their labels with the window instead of
+  // keeping them legible.
+  await page.goto('/');
+  await waitForCompletion(page);
+  await ensureOpen(page, 'detail');
+
+  /** How far the browser has had to scale the box plots to make them fit. */
+  const boxPlotScale = () =>
+    page.evaluate(() => {
+      const svg = document.querySelector('svg.box__svg');
+      if (!svg) return 0;
+      const drawn = Number(svg.getAttribute('viewBox')?.split(' ')[2] ?? 0);
+      return drawn > 0 ? svg.getBoundingClientRect().width / drawn : 0;
+    });
+
+  const labelHeights: number[] = [];
+
+  for (const size of [
+    { width: 390, height: 844 },
+    { width: 820, height: 900 },
+    { width: 1280, height: 800 },
+    { width: 1920, height: 1080 },
+  ]) {
+    await page.setViewportSize(size);
+
+    // Never stretched, and only shrunk by the narrow-window floor. The redraw
+    // is debounced, so this poll is also what waits for it.
+    await expect
+      .poll(boxPlotScale, { message: `box plots are mis-scaled at ${size.width}px` })
+      .toBeGreaterThan(0.85);
+    expect(await boxPlotScale(), `box plots are stretched at ${size.width}px`).toBeLessThanOrEqual(
+      1.01,
+    );
+
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    expect(overflow, `page overflows horizontally at ${size.width}px`).toBeLessThanOrEqual(1);
+
+    const label = await page.locator('.box__label').first().boundingBox();
+    expect(label, `no box-plot label at ${size.width}px`).not.toBeNull();
+    labelHeights.push(label!.height);
+
+    // The two traces stay side by side until there is genuinely no room.
+    const down = await page.getByTestId('download-chart').boundingBox();
+    const up = await page.getByTestId('upload-chart').boundingBox();
+    expect(down).not.toBeNull();
+    expect(up).not.toBeNull();
+    if (size.width >= 820) {
+      expect(
+        Math.abs(down!.y - up!.y),
+        `download and upload should share a row at ${size.width}px`,
+      ).toBeLessThan(4);
+    }
+  }
+
+  // The point of drawing at a measured pixel width: one label is very nearly
+  // the same size on a phone as on a 1920px monitor. Before this, the same
+  // plot rendered at 6px in a narrow window and 17px in a wide one.
+  const spread = Math.max(...labelHeights) - Math.min(...labelHeights);
+  expect(
+    spread,
+    `box-plot labels rescale with the window: ${labelHeights.join(', ')}`,
+  ).toBeLessThanOrEqual(2.5);
+});
+
 test('a running test can be paused and resumed', async ({ page }) => {
   await page.goto('/');
   // Wait until it is genuinely under way before pausing.

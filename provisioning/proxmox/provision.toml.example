@@ -67,3 +67,8 @@ extra_tags = ["speedtest"]
 # Which [profiles.*] in config/speedtest.toml the deployed service runs.
 # lan-1g or lan-10g; see docs/wiki/Configuration.md for the sizing rules.
 measurement_profile = "lan-1g"
+
+# What the deployed service calls itself in the browser: the page heading and
+# the tab title. Leave it out to keep the shipped default ("LAN Speed Test").
+# Changing it and re-running `apply` renames the site — no rebuild.
+# site_name = "Rack Room Speed Test"

@@ -59,7 +59,10 @@ To run from source, see [docs/wiki/Development.md](docs/wiki/Development.md).
 ## Configuration
 
 One TOML file with named measurement profiles — `lan-1g`, `lan-10g`, `quick` —
-selectable with `SPEEDTEST_PROFILE` and applied on restart, no rebuild.
+selectable with `SPEEDTEST_PROFILE` and applied on restart, no rebuild. The
+same goes for what the page calls itself: `SPEEDTEST_SITE_NAME` (or
+`server.site_name`) sets the heading and the tab title, so two of these on one
+LAN are tellable apart without rebuilding either.
 
 Profiles matter more than they look. The engine's defaults are tuned for
 internet paths and are actively wrong on a LAN: leave

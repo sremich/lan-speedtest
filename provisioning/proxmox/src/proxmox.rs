@@ -392,6 +392,7 @@ mod tests {
             onboot: true,
             extra_tags: vec![],
             measurement_profile: "lan-1g".into(),
+            site_name: None,
             ssh_authorized_key: "~/.ssh/id_ed25519.pub".into(),
         }
     }
