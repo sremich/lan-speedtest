@@ -294,15 +294,16 @@ async fn report_address(pve: &Proxmox<'_>, vmid: u32) {
 mod tests {
     use super::*;
 
-    /// The shipped `provision.toml`, which is also what gets deployed.
-    fn shipped() -> Config {
-        Config::load(std::path::Path::new("provision.toml"))
-            .expect("provision.toml parses and validates from the crate directory")
+    /// The committed example, which is the only one CI can see — a real
+    /// `provision.toml` carries the node's address and is gitignored.
+    fn example() -> Config {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("provision.toml.example");
+        Config::load(&path).expect("the committed example parses and validates")
     }
 
     #[test]
     fn the_deploy_env_carries_the_reverse_dns_switch_only_when_asked() {
-        let mut cfg = shipped();
+        let mut cfg = example();
 
         cfg.guest.reverse_dns = false;
         cfg.guest.dns_resolver = None;
@@ -335,7 +336,7 @@ mod tests {
         // a value containing a newline would inject an unrelated variable.
         // Asserted against the real thing rather than against an escaped
         // string, because the property is what compose will make of it.
-        let cfg = shipped();
+        let cfg = example();
         let body = deploy_env(&cfg, None, "10.0.0.1");
         for line in body.lines().filter(|l| !l.starts_with('#')) {
             let (key, _) = line
@@ -354,7 +355,7 @@ mod tests {
         // configured: with a uri but no credentials the engine falls back to
         // fetching them from Cloudflare, which is the one thing this project
         // exists to prevent.
-        let cfg = shipped();
+        let cfg = example();
         let body = deploy_env(&cfg, None, "10.0.0.1");
         assert!(body.contains("SPEEDTEST_TURN_ENABLED=false"));
         assert!(!body.contains("SPEEDTEST_TURN_URI"));

@@ -68,6 +68,16 @@ extra_tags = ["speedtest"]
 # lan-1g or lan-10g; see docs/wiki/Configuration.md for the sizing rules.
 measurement_profile = "lan-1g"
 
+# Name clients in the history from their PTR records. Off here, because the
+# safe default for anyone starting from this file is not to make DNS queries
+# they did not ask for. When on, it is still restricted to the private ranges
+# in config/speedtest.toml, and the lookup runs after a run is stored rather
+# than on the request path. See docs/wiki/Client-Identity.md.
+reverse_dns = false
+# Resolver to ask, as host:port. Unset reads the container's own
+# /etc/resolv.conf, which is usually right.
+# dns_resolver = "10.0.0.1:53"
+
 # What the deployed service calls itself in the browser: the page heading and
 # the tab title. Leave it out to keep the shipped default ("LAN Speed Test").
 # Changing it and re-running `apply` renames the site — no rebuild.
