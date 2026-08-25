@@ -106,6 +106,33 @@ describe('summarise', () => {
     expect(s.outliers).toEqual([]);
   });
 
+  it('a whisker never ends inside its own box', () => {
+    // [1, 2, 3, 100]: p75 is 27.25 but the largest non-outlier is 3, so an
+    // unclamped upper whisker would sit inside the box and the plot would
+    // render back-to-front. Caught by the box-geometry test in CI.
+    const s = summarise([1, 2, 3, 100]) as Summary;
+    expect(s.outliers).toContain(100);
+    expect(s.upperWhisker).toBeGreaterThanOrEqual(s.p75);
+    expect(s.lowerWhisker).toBeLessThanOrEqual(s.p25);
+  });
+
+  it('whiskers bracket the box for any sample set', () => {
+    const sets = [
+      [1, 2, 3, 100],
+      [100, 3, 2, 1],
+      [1, 1, 1, 1, 999],
+      [5],
+      [5, 5],
+      [0.1, 0.2, 0.3, 50, 60],
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+    ];
+    for (const samples of sets) {
+      const s = summarise(samples) as Summary;
+      expect(s.lowerWhisker, `${samples}`).toBeLessThanOrEqual(s.p25);
+      expect(s.upperWhisker, `${samples}`).toBeGreaterThanOrEqual(s.p75);
+    }
+  });
+
   it('whiskers always sit inside min and max', () => {
     for (const samples of [
       [1, 2, 3],

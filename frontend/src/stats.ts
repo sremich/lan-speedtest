@@ -86,8 +86,18 @@ export function summarise(samples: readonly number[]): Summary | null {
     iqr,
     // Whiskers reach the furthest *actual* sample inside the fence, not the
     // fence itself — drawing to the fence invents a value nothing measured.
-    lowerWhisker: inside.length > 0 ? inside[0]! : sorted[0]!,
-    upperWhisker: inside.length > 0 ? inside[inside.length - 1]! : sorted[sorted.length - 1]!,
+    //
+    // Then clamped to the box. With few samples and an extreme outlier the
+    // quartile can sit beyond the last non-outlier sample — [1, 2, 3, 100]
+    // gives p75 = 27.25 with nothing between 3 and the fence — which would
+    // draw a whisker ending inside its own box. Standard box plots clamp, and
+    // it makes the geometry invariant true by construction rather than by
+    // tolerance.
+    lowerWhisker: Math.min(p25, inside.length > 0 ? inside[0]! : sorted[0]!),
+    upperWhisker: Math.max(
+      p75,
+      inside.length > 0 ? inside[inside.length - 1]! : sorted[sorted.length - 1]!,
+    ),
     outliers,
   };
 }

@@ -64,23 +64,26 @@ fi
 
 # Only touch the service if something actually changed — that is what makes
 # a re-run a no-op rather than a restart.
+# Named SERVICE_USER rather than COTURN_USER because the latter reads as a
+# misspelling of TURN_USER — to shellcheck and to people.
+#
 # coturn drops privileges to its own user, so a root-only config is silently
 # unreadable: it logs "Cannot find config file" and runs on defaults — no
 # realm, no credentials, no relay range — which looks like a working relay
 # right up until a browser tries to authenticate. Group-readable by that user,
 # never world-readable, because this file holds the TURN password.
-COTURN_USER=$(systemctl show coturn -p User --value 2>/dev/null)
-COTURN_USER=${COTURN_USER:-turnserver}
-if ! getent group "$COTURN_USER" >/dev/null 2>&1; then
-  COTURN_USER=root
+SERVICE_USER=$(systemctl show coturn -p User --value 2>/dev/null)
+SERVICE_USER=${SERVICE_USER:-turnserver}
+if ! getent group "$SERVICE_USER" >/dev/null 2>&1; then
+  SERVICE_USER=root
 fi
 
-if [[ -f "$DEST" ]] && cmp -s "$tmp" "$DEST"    && [[ "$(stat -c '%U:%G:%a' "$DEST")" == "root:${COTURN_USER}:640" ]]; then
+if [[ -f "$DEST" ]] && cmp -s "$tmp" "$DEST"    && [[ "$(stat -c '%U:%G:%a' "$DEST")" == "root:${SERVICE_USER}:640" ]]; then
   echo "    $DEST already current"
   rm -f "$tmp"
   CHANGED=0
 else
-  install -m 640 -o root -g "$COTURN_USER" "$tmp" "$DEST"
+  install -m 640 -o root -g "$SERVICE_USER" "$tmp" "$DEST"
   rm -f "$tmp"
   CHANGED=1
 fi
@@ -120,7 +123,7 @@ fi
 # unexplained ICE timeout in a browser.
 if journalctl -u coturn --since "-2 min" --no-pager 2>/dev/null    | grep -q "Cannot find config file"; then
   echo "ERROR: coturn cannot read ${DEST} and is running on defaults." >&2
-  echo "       It runs as '${COTURN_USER}'; the file is $(stat -c '%U:%G %a' "$DEST")." >&2
+  echo "       It runs as '${SERVICE_USER}'; the file is $(stat -c '%U:%G %a' "$DEST")." >&2
   exit 1
 fi
 
