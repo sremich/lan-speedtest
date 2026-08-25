@@ -42,6 +42,10 @@ pass = ""
 # 1 Gbps ~= 125 MB/s, so 25 MB lands near 200 ms and 100 MB near 800 ms.
 [profiles.lan-1g]
 description = "1 GbE LAN client"
+# The link this profile's transfer sizes were chosen for. Auto-selection uses
+# it to pick a profile, and a unit test uses it to check the sizes below.
+nominal_bps = 1_000_000_000
+auto_selectable = true
 estimated_server_time = 0.0
 measure_download_loaded_latency = true
 measure_upload_loaded_latency = true
@@ -72,6 +76,8 @@ measurements = [
 # payloads cost more in browser string decoding than they buy in measurement.
 [profiles.lan-10g]
 description = "10 GbE LAN client"
+nominal_bps = 10_000_000_000
+auto_selectable = true
 estimated_server_time = 0.0
 measure_download_loaded_latency = true
 measure_upload_loaded_latency = true
@@ -102,6 +108,10 @@ measurements = [
 # deployment without waiting out a full run.
 [profiles.quick]
 description = "Fast smoke test"
+# Loopback, not a real link: a hosted CI runner measured 34-51 Gbps. Never
+# auto-selected — it exists for smoke tests, and choosing it for a real client
+# would silently under-measure the link.
+nominal_bps = 52_000_000_000
 estimated_server_time = 0.0
 measure_download_loaded_latency = true
 measure_upload_loaded_latency = true
@@ -129,6 +139,7 @@ measurements = [
 # path, not throughput.
 [profiles.e2e-packetloss]
 description = "Packet-loss e2e"
+nominal_bps = 52_000_000_000
 estimated_server_time = 0.0
 measure_download_loaded_latency = true
 measure_upload_loaded_latency = true

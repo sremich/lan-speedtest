@@ -155,6 +155,22 @@ pub struct Profile {
     /// jitter needs two.
     #[serde(default = "default_loaded_latency_throttle")]
     pub loaded_latency_throttle: f64,
+    /// Nominal link speed this profile's transfer sizes were chosen for, in
+    /// bits per second.
+    ///
+    /// One source of truth for two consumers: `Auto` in the front end picks
+    /// the fastest profile a measured link can justify, and
+    /// `shipped_profiles_keep_loaded_latency_measurable` checks the transfer
+    /// sizes against it. Those two used to disagree because the test carried
+    /// its own hard-coded table.
+    #[serde(default)]
+    pub nominal_bps: Option<f64>,
+    /// Whether `Auto` may choose this profile.
+    ///
+    /// Off by default: the small profiles exist for smoke tests and CI, and
+    /// auto-selecting one would silently under-measure a real link.
+    #[serde(default)]
+    pub auto_selectable: bool,
 }
 
 /// One engine measurement stage. Mirrors `MeasurementConfig` from
@@ -484,30 +500,26 @@ measurements = [
             .expect("config/speedtest.toml is readable from the crate dir");
         let cfg: Config = toml::from_str(&raw).expect("shipped config parses");
 
-        // Nominal bytes-per-second each profile is written for.
-        // The two e2e profiles run over loopback, which is far quicker than any
-        // real link: a hosted CI runner measured 51 Gbps (6.5 GB/s). Sizing
-        // them for anything slower let transfers finish under the threshold,
-        // which silently removed every AIM rating in Firefox on CI.
-        let link_speed: BTreeMap<&str, f64> = [
-            ("lan-1g", 125e6),
-            ("lan-10g", 1.25e9),
-            ("quick", 6.5e9),
-            ("e2e-packetloss", 6.5e9),
-        ]
-        .into_iter()
-        .collect();
-
+        // Each profile states the link speed it was sized for, so this checks
+        // the config against itself rather than against a table here that
+        // could drift away from it. The two e2e profiles run over loopback,
+        // which is far quicker than any real link: a hosted CI runner measured
+        // 51 Gbps. Sizing them for anything slower let transfers finish under
+        // the threshold, which silently removed every AIM rating in Firefox
+        // on CI.
         for (name, profile) in &cfg.profiles {
+            assert!(
+                profile.nominal_bps.is_some(),
+                "profile '{name}' has no nominal_bps, so nothing checks its transfer sizes"
+            );
             assert!(
                 profile.loaded_request_min_duration < 250.0,
                 "profile '{name}' leaves loaded_request_min_duration at or above                  the engine default"
             );
             assert!(profile.loaded_latency_throttle < 400.0, "profile '{name}'");
 
-            let Some(&bps) = link_speed.get(name.as_str()) else {
-                continue;
-            };
+            // Bytes per second, from the profile's own stated link speed.
+            let bps = profile.nominal_bps.unwrap_or_default() / 8.0;
             // Ignore warm-up rounds, which are explicitly exempted.
             let smallest = profile
                 .measurements

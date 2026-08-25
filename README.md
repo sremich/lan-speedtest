@@ -59,7 +59,9 @@ To run from source, see [docs/wiki/Development.md](docs/wiki/Development.md).
 ## Configuration
 
 One TOML file with named measurement profiles — `lan-1g`, `lan-10g`, `quick` —
-selectable with `SPEEDTEST_PROFILE` and applied on restart, no rebuild. The
+selectable with `SPEEDTEST_PROFILE` and applied on restart, no rebuild. That
+setting is the *default*: a picker in the page lets a client choose another, or
+`Auto`, which sizes the test to the link it measures. The
 same goes for what the page calls itself: `SPEEDTEST_SITE_NAME` (or
 `server.site_name`) sets the heading and the tab title, so two of these on one
 LAN are tellable apart without rebuilding either.

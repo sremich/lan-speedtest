@@ -4,6 +4,23 @@ Versions are three-part `X.Y.Z`. While the major version is 0, every release is
 a GitHub pre-release — tier-4 validation (10 GbE saturation and a packet
 capture proving no external traffic) gates 1.0.0.
 
+## 1.2.0
+
+The measurement made legible.
+
+- A step strip replaces the progress bar: one chevron per request the profile
+  will issue, drawn before the run starts, with per-stage detail and results on
+  hover.
+- Hover detail on the traces — speed, payload, round trip and request duration
+  for the individual sample under the pointer.
+- A profile picker with `Auto`. The profile was fixed server-side, which is why
+  every stored run said `lan-1g`.
+- Traces are monotone cubic curves: smooth, but unable to overshoot between
+  samples.
+- The headline is one band across the top. Measured against
+  speed.cloudflare.com at six viewport widths, which showed the reference caps
+  at 1200px and centres rather than filling the window.
+
 ## 1.1.0
 
 A name of its own, and a layout that survives being resized.

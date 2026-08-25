@@ -102,6 +102,7 @@ pub fn router(state: AppState) -> Router {
         .route("/__up", post(up))
         .route("/api/status", get(status))
         .route("/api/profile", get(profile))
+        .route("/api/profiles", get(profiles))
         .route("/api/health", get(|| async { "ok" }))
         .route("/api/results", post(record_result))
         .route("/api/history", get(list_history))
@@ -438,9 +439,66 @@ struct ProfileResponse {
     engine_config: EngineConfig,
 }
 
-async fn profile(State(state): State<AppState>) -> impl IntoResponse {
+/// Which profile to hand out. Absent means the server's configured default.
+#[derive(Debug, Deserialize)]
+struct ProfileQuery {
+    #[serde(default)]
+    name: Option<String>,
+}
+
+/// One entry in the profile picker.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProfileSummary {
+    name: String,
+    description: String,
+    /// The link speed the profile's transfer sizes were chosen for.
+    nominal_bps: Option<f64>,
+    /// Whether automatic selection may choose it.
+    auto_selectable: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProfilesResponse {
+    /// The server's configured profile, used when the client expresses no
+    /// preference.
+    default: String,
+    profiles: Vec<ProfileSummary>,
+}
+
+/// `GET /api/profiles` — what the picker can offer.
+async fn profiles(State(state): State<AppState>) -> impl IntoResponse {
     let cfg = &state.config;
-    let active = cfg.active_profile();
+    axum::Json(ProfilesResponse {
+        default: cfg.profile.clone(),
+        profiles: cfg
+            .profiles
+            .iter()
+            .map(|(name, p)| ProfileSummary {
+                name: name.clone(),
+                description: p.description.clone(),
+                nominal_bps: p.nominal_bps,
+                auto_selectable: p.auto_selectable,
+            })
+            .collect(),
+    })
+}
+
+async fn profile(State(state): State<AppState>, Query(q): Query<ProfileQuery>) -> Response {
+    let cfg = &state.config;
+
+    // A client may ask for a different profile, but only by name and only one
+    // that exists — the name indexes the configured map and is never used to
+    // build anything.
+    let name = match q.name {
+        Some(n) if !n.is_empty() => n,
+        _ => cfg.profile.clone(),
+    };
+    let Some(active) = cfg.profiles.get(&name) else {
+        return (StatusCode::BAD_REQUEST, format!("unknown profile '{name}'")).into_response();
+    };
+
     let turn_on = cfg.turn.enabled;
 
     // Drop the packet-loss stage when no relay is configured, rather than
@@ -453,7 +511,7 @@ async fn profile(State(state): State<AppState>) -> impl IntoResponse {
         .collect();
 
     axum::Json(ProfileResponse {
-        profile: cfg.profile.clone(),
+        profile: name,
         description: active.description.clone(),
         packet_loss_enabled: turn_on,
         engine_config: EngineConfig {
@@ -473,6 +531,7 @@ async fn profile(State(state): State<AppState>) -> impl IntoResponse {
             turn_server_pass: turn_on.then(|| cfg.turn.pass.clone()),
         },
     })
+    .into_response()
 }
 
 #[cfg(test)]

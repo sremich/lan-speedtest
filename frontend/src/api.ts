@@ -43,6 +43,22 @@ export interface ProfileResponse {
   engineConfig: EngineConfig;
 }
 
+/** One entry the profile picker can offer. */
+export interface ProfileSummary {
+  name: string;
+  description: string;
+  /** The link speed this profile's transfer sizes were chosen for. */
+  nominalBps: number | null;
+  /** Whether automatic selection may choose it. */
+  autoSelectable: boolean;
+}
+
+export interface ProfilesResponse {
+  /** The server's configured profile, used when the client has no preference. */
+  default: string;
+  profiles: ProfileSummary[];
+}
+
 async function getJson<T>(path: string): Promise<T> {
   const res = await fetch(path, { cache: 'no-store' });
   if (!res.ok) throw new Error(`${path} responded ${res.status}`);
@@ -50,8 +66,21 @@ async function getJson<T>(path: string): Promise<T> {
 }
 
 export const fetchStatus = (): Promise<Status> => getJson<Status>('/api/status');
-export const fetchProfile = (): Promise<ProfileResponse> =>
-  getJson<ProfileResponse>('/api/profile');
+
+/**
+ * Fetches an engine configuration.
+ *
+ * A name asks for a specific profile; the server refuses one it does not know
+ * rather than quietly serving its default, so a stale choice surfaces as an
+ * error instead of measuring something other than what it claims to.
+ */
+export const fetchProfile = (name?: string): Promise<ProfileResponse> =>
+  getJson<ProfileResponse>(
+    name ? `/api/profile?name=${encodeURIComponent(name)}` : '/api/profile',
+  );
+
+export const fetchProfiles = (): Promise<ProfilesResponse> =>
+  getJson<ProfilesResponse>('/api/profiles');
 
 /**
  * Refuses to start a test that could reach off the LAN.

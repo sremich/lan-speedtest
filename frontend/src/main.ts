@@ -6,10 +6,18 @@
  */
 
 import SpeedTest from '@cloudflare/speedtest';
-import type { MeasurementSummary, Results, Scores } from '@cloudflare/speedtest';
+import type { BandwidthPoint, MeasurementSummary, Results, Scores } from '@cloudflare/speedtest';
 
 import './styles.css';
-import { assertLanOnly, fetchProfile, fetchStatus, submitResult, type EngineConfig } from './api';
+import {
+  assertLanOnly,
+  fetchProfile,
+  fetchProfiles,
+  fetchStatus,
+  submitResult,
+  type EngineConfig,
+  type ProfileSummary,
+} from './api';
 import {
   formatBandwidth,
   formatDuration,
@@ -17,9 +25,16 @@ import {
   formatPacketLoss,
   latencyIsAtBrowserResolution,
 } from './format';
-import { renderAreaChart } from './areachart';
+import { renderAreaChart, type SamplePosition } from './areachart';
 import { BOXPLOT_LEGEND, renderBoxPlots } from './boxplot';
 import { measureParallelThroughput, suggestedProfile } from './parallel';
+import {
+  formatPayload,
+  planStages,
+  renderChevrons,
+  totalRequests,
+  type Stage,
+} from './progress';
 import { bandwidthBySize, formatTransferSize, summarise, type Distribution } from './stats';
 
 type Engine = InstanceType<typeof SpeedTest>;
@@ -39,6 +54,40 @@ let currentEngine: Engine | undefined;
  */
 let lastResults: Results | undefined;
 
+/** What a trace needs to answer a hover: where it drew each sample, and what
+ *  that sample actually was. Kept together so the two cannot drift apart. */
+interface TraceState {
+  positions: readonly SamplePosition[];
+  points: BandwidthPoint[];
+  colour: string;
+  label: string;
+}
+
+const traces: Record<'download' | 'upload', TraceState> = {
+  download: { positions: [], points: [], colour: 'var(--accent)', label: 'Download' },
+  upload: { positions: [], points: [], colour: 'var(--upload)', label: 'Upload' },
+};
+
+/** The planned stages of the current run, and how far through them we are. */
+let stages: Stage[] = [];
+let completedRequests = 0;
+/** Index into `stages` of the stage now running; -1 before the first. */
+let currentStage = -1;
+/** Sample counts when the current stage began, to measure progress inside it. */
+let stageBaseline = { download: 0, upload: 0, latency: 0 };
+/** What each finished stage measured, keyed by step number. */
+const stageOutcome = new Map<number, string>();
+/** The step under the pointer, so a redraw does not drop the highlight. */
+let hoveredStep: number | undefined;
+
+/** Profiles the picker can offer, and the server's own default. */
+let availableProfiles: ProfileSummary[] = [];
+let serverDefaultProfile = '';
+
+/** Remembered across visits, so a chosen profile sticks to this browser. */
+const PROFILE_KEY = 'speedtest.profile';
+const AUTO = '__auto__';
+
 const el = <T extends HTMLElement>(id: string): T => {
   const node = document.getElementById(id);
   if (!node) throw new Error(`missing element #${id}`);
@@ -49,7 +98,6 @@ const ui = {
   siteName: el('site-name'),
   phase: el('phase'),
   restart: el<HTMLButtonElement>('restart'),
-  progress: el('progress'),
   error: el('error'),
   download: el('download'),
   downloadUnit: el('download-unit'),
@@ -76,6 +124,9 @@ const ui = {
   rawRun: el<HTMLButtonElement>('raw-run'),
   rawStatus: el('raw-status'),
   rawResult: el('raw-result'),
+  profileSelect: el<HTMLSelectElement>('profile-select'),
+  chevrons: el('chevrons'),
+  stepTip: el('step-tip'),
 };
 
 /** Human labels for the engine's AIM experience keys. */
@@ -165,26 +216,136 @@ function render(results: Results, final = false): void {
  * of the samples rather than an unexplained summary of them.
  */
 function renderTraces(results: Results, summary: MeasurementSummary): void {
-  const down = results.getDownloadBandwidthPoints().map((p) => p.bps);
-  const up = results.getUploadBandwidthPoints().map((p) => p.bps);
+  drawTrace('download', ui.downloadChart, results.getDownloadBandwidthPoints(), summary.download);
+  drawTrace('upload', ui.uploadChart, results.getUploadBandwidthPoints(), summary.upload);
+}
 
-  ui.downloadChart.innerHTML = renderAreaChart(down, {
-    colour: 'var(--accent)',
-    id: 'grad-down',
-    format: bps,
-    ...(summary.download !== undefined
-      ? { marker: { value: summary.download, label: '90th percentile' } }
-      : {}),
+function drawTrace(
+  key: 'download' | 'upload',
+  host: HTMLElement,
+  raw: readonly BandwidthPoint[],
+  reported: number | undefined,
+): void {
+  const state = traces[key];
+  // Filtered here rather than inside the renderer, so the positions it hands
+  // back stay index-aligned with the samples the tooltip reads.
+  const points = raw.filter((p) => Number.isFinite(p.bps) && p.bps >= 0);
+
+  const chart = renderAreaChart(
+    points.map((p) => p.bps),
+    {
+      colour: state.colour,
+      id: `grad-${key}`,
+      ...(reported !== undefined ? { marker: { value: reported, label: '90th percentile' } } : {}),
+    },
+  );
+
+  host.innerHTML = chart.html;
+  state.positions = chart.positions;
+  state.points = points;
+}
+
+/**
+ * Hover on a trace: a guide line, a dot on the curve, and what that sample
+ * actually was.
+ *
+ * The engine records far more per sample than the headline uses — the payload
+ * size, the round trip, how long the request took — and a single point on the
+ * curve is where that detail belongs.
+ */
+function attachTraceHover(key: 'download' | 'upload', host: HTMLElement): void {
+  host.addEventListener('pointermove', (event) => showTraceTip(key, host, event));
+  host.addEventListener('pointerleave', () => {
+    for (const node of host.querySelectorAll<HTMLElement>('.trace__cursor, .trace__tip')) {
+      node.hidden = true;
+    }
+  });
+}
+
+function showTraceTip(key: 'download' | 'upload', host: HTMLElement, event: PointerEvent): void {
+  const state = traces[key];
+  const plot = host.querySelector<HTMLElement>('.trace__plot');
+  const cursor = host.querySelector<HTMLElement>('.trace__cursor');
+  const tip = host.querySelector<HTMLElement>('.trace__tip');
+  if (!plot || !cursor || !tip || state.positions.length === 0) return;
+
+  const box = plot.getBoundingClientRect();
+  if (box.width === 0) return;
+  const fraction = (event.clientX - box.left) / box.width;
+
+  let nearest = 0;
+  let best = Infinity;
+  state.positions.forEach((p, i) => {
+    const distance = Math.abs(p.xPct / 100 - fraction);
+    if (distance < best) {
+      best = distance;
+      nearest = i;
+    }
   });
 
-  ui.uploadChart.innerHTML = renderAreaChart(up, {
-    colour: 'var(--upload)',
-    id: 'grad-up',
-    format: bps,
-    ...(summary.upload !== undefined
-      ? { marker: { value: summary.upload, label: '90th percentile' } }
-      : {}),
-  });
+  const position = state.positions[nearest]!;
+  const point = state.points[nearest];
+  if (!point) return;
+
+  const line = cursor.querySelector<HTMLElement>('.trace__cursor-line');
+  const dot = cursor.querySelector<HTMLElement>('.trace__cursor-dot');
+  if (line) line.style.left = `${position.xPct}%`;
+  if (dot) {
+    dot.style.left = `${position.xPct}%`;
+    dot.style.top = `${position.yPct}%`;
+  }
+  cursor.hidden = false;
+
+  tip.innerHTML = traceTipMarkup(state, point);
+  tip.hidden = false;
+  placeTip(tip, plot, (position.xPct / 100) * box.width, (position.yPct / 100) * box.height);
+}
+
+function tipRow(key: string, value: string): string {
+  return `<div><span class="tip__key">${key}:</span> <span class="tip__value">${value}</span></div>`;
+}
+
+function traceTipMarkup(state: TraceState, point: BandwidthPoint): string {
+  const speed = formatBandwidth(point.bps);
+  const rows = [tipRow('Speed', `${speed.value} ${speed.unit}`)];
+  if (Number.isFinite(point.bytes) && point.bytes > 0) {
+    rows.push(tipRow('Payload', formatPayload(point.bytes)));
+  }
+  if (Number.isFinite(point.ping) && point.ping > 0) {
+    rows.push(tipRow('Round trip', `${point.ping.toFixed(2)} ms`));
+  }
+  if (Number.isFinite(point.duration) && point.duration > 0) {
+    rows.push(tipRow('Request took', `${point.duration.toFixed(0)} ms`));
+  }
+  return (
+    `<div class="tip__head" style="--swatch: ${state.colour}">` +
+    `<span class="tip__swatch"></span>${state.label}</div>${rows.join('')}`
+  );
+}
+
+/**
+ * Places a tooltip near a point without letting it escape its container.
+ *
+ * Measured after the content is set, because its size depends on the text.
+ * Prefers to sit above the thing it describes and flips below when there is
+ * no room — otherwise it clamps to the top edge and covers the controls.
+ */
+function placeTip(
+  tip: HTMLElement,
+  within: HTMLElement,
+  x: number,
+  y: number,
+  anchorHeight = 0,
+): void {
+  tip.style.left = '0px';
+  tip.style.top = '0px';
+
+  const maxX = Math.max(0, within.clientWidth - tip.offsetWidth);
+  const maxY = Math.max(0, within.clientHeight - tip.offsetHeight);
+  const above = y - tip.offsetHeight - 10;
+
+  tip.style.left = `${Math.max(0, Math.min(maxX, x + 12))}px`;
+  tip.style.top = `${Math.max(0, Math.min(maxY, above >= 0 ? above : y + anchorHeight + 10))}px`;
 }
 
 /** Formats bits per second for an axis or tooltip. */
@@ -292,6 +453,261 @@ function renderDetail(results: Results): void {
     BOXPLOT_LEGEND;
 }
 
+/* --- the step strip ------------------------------------------------------ */
+
+/** Redraws the strip, preserving the highlight if the pointer is still on it. */
+function paintChevrons(): void {
+  ui.chevrons.innerHTML = renderChevrons(stages, completedRequests);
+  if (hoveredStep !== undefined) highlightStep(hoveredStep);
+}
+
+/** How many samples of a kind the engine has produced so far. */
+function sampleCount(results: Results, type: string): number {
+  switch (type) {
+    case 'download':
+      return results.getDownloadBandwidthPoints().length;
+    case 'upload':
+      return results.getUploadBandwidthPoints().length;
+    case 'latency':
+      return results.getUnloadedLatencyPoints().length;
+    default:
+      // Packet loss reports one figure at the end, so it has no partial
+      // progress to read; its block fills when the stage completes.
+      return 0;
+  }
+}
+
+function baselineFor(type: string): number {
+  if (type === 'download') return stageBaseline.download;
+  if (type === 'upload') return stageBaseline.upload;
+  if (type === 'latency') return stageBaseline.latency;
+  return 0;
+}
+
+/**
+ * Advances the strip.
+ *
+ * Sample counts accumulate across every stage of a kind, so progress within
+ * the running stage is the growth since it started. Monotonic on purpose: a
+ * count that went backwards would make the strip flicker.
+ */
+function updateProgress(results: Results): void {
+  const stage = stages[currentStage];
+  if (!stage) return;
+
+  const grown = sampleCount(results, stage.type) - baselineFor(stage.type);
+  const done = stage.offset + Math.min(stage.requests, Math.max(0, grown));
+  if (done > completedRequests) {
+    completedRequests = done;
+    paintChevrons();
+  }
+}
+
+/** Closes off the stage that just ended and opens the next one. */
+function advanceStage(results: Results | undefined): void {
+  const finished = stages[currentStage];
+  if (finished) {
+    completedRequests = Math.max(completedRequests, finished.offset + finished.requests);
+    if (results) {
+      const outcome = summariseStage(results, finished);
+      if (outcome) stageOutcome.set(finished.step, outcome);
+    }
+  }
+
+  currentStage += 1;
+  if (results) {
+    stageBaseline = {
+      download: results.getDownloadBandwidthPoints().length,
+      upload: results.getUploadBandwidthPoints().length,
+      latency: results.getUnloadedLatencyPoints().length,
+    };
+  }
+  paintChevrons();
+}
+
+/** What a finished stage measured, for its tooltip. */
+function summariseStage(results: Results, stage: Stage): string | undefined {
+  if (stage.type === 'download' || stage.type === 'upload') {
+    const all =
+      stage.type === 'download'
+        ? results.getDownloadBandwidthPoints()
+        : results.getUploadBandwidthPoints();
+    const summary = summarise(all.slice(baselineFor(stage.type)).map((p) => p.bps));
+    if (!summary) return undefined;
+    const f = formatBandwidth(summary.median);
+    return `${f.value} ${f.unit} median`;
+  }
+
+  if (stage.type === 'latency') {
+    const summary = summarise(results.getUnloadedLatencyPoints().slice(stageBaseline.latency));
+    return summary ? `${summary.median.toFixed(2)} ms median` : undefined;
+  }
+
+  if (stage.type.startsWith('packetLoss')) {
+    const loss = results.getPacketLoss();
+    return loss !== undefined && Number.isFinite(loss)
+      ? `${formatPacketLoss(loss)} lost`
+      : undefined;
+  }
+
+  return undefined;
+}
+
+function highlightStep(step: number): void {
+  for (const chev of ui.chevrons.querySelectorAll<HTMLElement>('.chev')) {
+    chev.classList.toggle('is-hovered', chev.dataset.step === String(step));
+  }
+}
+
+function hideStepTip(): void {
+  hoveredStep = undefined;
+  ui.stepTip.hidden = true;
+  for (const chev of ui.chevrons.querySelectorAll<HTMLElement>('.chev.is-hovered')) {
+    chev.classList.remove('is-hovered');
+  }
+}
+
+/**
+ * Hover on the strip: what this stage is, and what it measured.
+ *
+ * The reference shows payload, request count and step number; we can add the
+ * result too, because by the time you hover we have measured it.
+ */
+function showStepTip(step: number, chev: HTMLElement): void {
+  const stage = stages.find((s) => s.step === step);
+  if (!stage) return;
+
+  hoveredStep = step;
+  highlightStep(step);
+
+  const rows: string[] = [];
+  if (stage.bytes !== undefined && stage.bytes > 0) {
+    rows.push(tipRow('Payload', formatPayload(stage.bytes)));
+  }
+  rows.push(tipRow('Requests', String(stage.requests)));
+  rows.push(tipRow('Step', `${stage.step} of ${stages.length}`));
+  const outcome = stageOutcome.get(step);
+  if (outcome) {
+    rows.push(tipRow('Measured', outcome));
+  } else if (stage.warmUp) {
+    rows.push('<div class="tip__key">Warm-up — not counted</div>');
+  }
+
+  ui.stepTip.innerHTML =
+    `<div class="tip__head"><span class="tip__swatch" ` +
+    `style="--swatch: ${stageColour(stage.type)}"></span>${stage.label}</div>${rows.join('')}`;
+  ui.stepTip.hidden = false;
+
+  // Positioned against the section, which is the tooltip's offset parent.
+  const host = ui.chevrons.parentElement ?? ui.chevrons;
+  const hostBox = host.getBoundingClientRect();
+  const chevBox = chev.getBoundingClientRect();
+  placeTip(
+    ui.stepTip,
+    host,
+    chevBox.left - hostBox.left + chevBox.width / 2,
+    chevBox.top - hostBox.top,
+    chevBox.height,
+  );
+}
+
+function stageColour(type: string): string {
+  switch (type) {
+    case 'download':
+      return 'var(--accent)';
+    case 'upload':
+      return 'var(--upload)';
+    case 'latency':
+      return '#3b82f6';
+    default:
+      return '#c2410c';
+  }
+}
+
+ui.chevrons.addEventListener('pointermove', (event) => {
+  const chev = (event.target as HTMLElement | null)?.closest<HTMLElement>('.chev');
+  if (!chev) {
+    hideStepTip();
+    return;
+  }
+  const step = Number(chev.dataset.step);
+  if (Number.isFinite(step)) showStepTip(step, chev);
+});
+ui.chevrons.addEventListener('pointerleave', hideStepTip);
+
+/* --- the profile picker --------------------------------------------------- */
+
+/**
+ * Populates the picker.
+ *
+ * Best-effort: a deployment whose profile list cannot be read should still run
+ * a test with whatever the server considers its default.
+ */
+async function setUpProfilePicker(): Promise<void> {
+  try {
+    const list = await fetchProfiles();
+    availableProfiles = list.profiles;
+    serverDefaultProfile = list.default;
+  } catch {
+    ui.profileSelect.hidden = true;
+    return;
+  }
+
+  const canAuto = availableProfiles.some((p) => p.autoSelectable && p.nominalBps);
+  const options = availableProfiles.map(
+    (p) =>
+      `<option value="${p.name}">${p.name}${p.description ? ` — ${p.description}` : ''}</option>`,
+  );
+  ui.profileSelect.innerHTML =
+    (canAuto ? `<option value="${AUTO}">Auto</option>` : '') + options.join('');
+  ui.profileSelect.value = storedProfileChoice();
+}
+
+/** The remembered choice, falling back to the server's default. */
+function storedProfileChoice(): string {
+  let stored: string | null = null;
+  try {
+    stored = localStorage.getItem(PROFILE_KEY);
+  } catch {
+    // Private browsing, or storage disabled. Not worth surfacing.
+  }
+  if (stored === AUTO && availableProfiles.some((p) => p.autoSelectable && p.nominalBps)) {
+    return AUTO;
+  }
+  if (stored && availableProfiles.some((p) => p.name === stored)) return stored;
+  return serverDefaultProfile;
+}
+
+/**
+ * Picks a profile from a quick measurement of the link.
+ *
+ * The profiles differ in transfer size, and a size chosen for the wrong link
+ * measures the wrong thing: 25 MB on 10 GbE finishes in 20 ms, which is mostly
+ * request overhead. The rule is the largest profile the measured link can
+ * justify, allowing a factor of two because a single stream reaches only part
+ * of a fast link.
+ */
+async function pickAutoProfile(): Promise<string | undefined> {
+  const candidates = availableProfiles
+    .filter((p) => p.autoSelectable && p.nominalBps)
+    .sort((a, b) => (a.nominalBps ?? 0) - (b.nominalBps ?? 0));
+  if (candidates.length === 0) return undefined;
+
+  setText(ui.phase, 'Sizing the test to the link…');
+  try {
+    const probe = await measureParallelThroughput({
+      streams: 1,
+      bytesPerStream: 64_000_000,
+      timeoutMs: 20_000,
+    });
+    const affordable = candidates.filter((p) => (p.nominalBps ?? 0) <= probe.bps * 2);
+    return (affordable[affordable.length - 1] ?? candidates[0])!.name;
+  } catch {
+    // A failed probe is not a failed test; fall back to the server's default.
+    return undefined;
+  }
+}
+
 function renderScores(results: Results, final: boolean): void {
   let scores: Scores;
   try {
@@ -356,10 +772,21 @@ function maybeNotePrecision(summary: MeasurementSummary): void {
 async function run(): Promise<void> {
   clearError();
   ui.restart.disabled = true;
-  ui.progress.style.width = '0%';
+  hideStepTip();
+  stages = [];
+  stageOutcome.clear();
+  completedRequests = 0;
+  currentStage = -1;
+  paintChevrons();
   setText(ui.phase, 'Starting…');
 
-  const [status, profile] = await Promise.all([fetchStatus(), fetchProfile()]);
+  const status = await fetchStatus();
+
+  // Auto probes the link before it can name a profile, so it has to resolve
+  // before the configuration is fetched.
+  const choice = ui.profileSelect.value || serverDefaultProfile;
+  const wanted = choice === AUTO ? await pickAutoProfile() : choice;
+  const profile = await fetchProfile(wanted);
 
   applySiteName(status.siteName);
   ui.profile.textContent = `profile: ${profile.profile}${
@@ -376,8 +803,12 @@ async function run(): Promise<void> {
   // Fails loudly rather than letting a bad deploy phone home. See api.ts.
   assertLanOnly(config);
 
-  const totalStages = config.measurements.length;
-  let completedStages = 0;
+  // The strip is drawn from the profile before anything runs, so the shape of
+  // the work is visible up front rather than only in hindsight.
+  stages = planStages(config.measurements);
+  document.body.dataset.profile = profile.profile;
+  document.body.dataset.steps = String(totalRequests(stages));
+  paintChevrons();
 
   const engine: Engine = new SpeedTest({
     ...config,
@@ -389,13 +820,14 @@ async function run(): Promise<void> {
   });
 
   engine.onPhaseChange = ({ measurement }) => {
-    completedStages += 1;
-    const pct = totalStages > 0 ? Math.min(100, (completedStages / totalStages) * 100) : 0;
-    ui.progress.style.width = `${pct}%`;
+    advanceStage(engine.results);
     ui.phase.textContent = PHASE_LABELS[measurement.type] ?? measurement.type;
   };
 
-  engine.onResultsChange = () => render(engine.results);
+  engine.onResultsChange = () => {
+    render(engine.results);
+    updateProgress(engine.results);
+  };
 
   engine.onError = (message: string) => {
     showError(`Test failed: ${message}`);
@@ -405,7 +837,11 @@ async function run(): Promise<void> {
 
   engine.onFinish = (results) => {
     render(results, true);
-    ui.progress.style.width = '100%';
+    // Close off the last stage and fill the strip: the final phase never gets
+    // a phase-change event of its own to end it.
+    advanceStage(results);
+    completedRequests = totalRequests(stages);
+    paintChevrons();
     setText(ui.phase, 'Complete');
     ui.restart.disabled = false;
     ui.pause.disabled = true;
@@ -513,16 +949,36 @@ window.addEventListener('resize', () => {
 });
 
 ui.restart.addEventListener('click', () => {
-  void run().catch((e: unknown) => {
-    showError(e instanceof Error ? e.message : String(e));
-    ui.restart.disabled = false;
-  });
+  void start();
 });
 
-// Auto-start on load, as the brief asks.
-void run().catch((e: unknown) => {
-  showError(e instanceof Error ? e.message : String(e));
-  setText(ui.phase, 'Failed');
-  ui.restart.disabled = false;
-  document.body.dataset.testState = 'error';
+/**
+ * Changing the profile re-runs immediately.
+ *
+ * Leaving the old result on screen under a new profile name would be the
+ * worst of both: the figures would not be what the label says they are.
+ */
+ui.profileSelect.addEventListener('change', () => {
+  try {
+    localStorage.setItem(PROFILE_KEY, ui.profileSelect.value);
+  } catch {
+    // Storage unavailable; the choice simply will not be remembered.
+  }
+  void start();
 });
+
+attachTraceHover('download', ui.downloadChart);
+attachTraceHover('upload', ui.uploadChart);
+
+function start(): Promise<void> {
+  return run().catch((e: unknown) => {
+    showError(e instanceof Error ? e.message : String(e));
+    setText(ui.phase, 'Failed');
+    ui.restart.disabled = false;
+    document.body.dataset.testState = 'error';
+  });
+}
+
+// Auto-start on load, as the brief asks — after the picker is populated, so
+// the run honours a remembered choice rather than always taking the default.
+void setUpProfilePicker().then(start);

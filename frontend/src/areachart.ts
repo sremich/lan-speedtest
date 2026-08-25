@@ -11,7 +11,12 @@
  * requests back to back but of varying sizes, so a time axis would bunch the
  * small early transfers into a sliver and stretch the large ones; index gives
  * every sample equal width, which is what makes the shape readable.
+ *
+ * The curve is monotone cubic rather than a polyline or an ordinary spline.
+ * See `curve.ts` for why that particular curve.
  */
+
+import { monotonePath, type Point } from './curve';
 
 export interface AreaChartOptions {
   /** Stroke and fill colour. */
@@ -20,13 +25,32 @@ export interface AreaChartOptions {
   id: string;
   /** Marked with a horizontal line, e.g. the reported 90th percentile. */
   marker?: { value: number; label: string };
-  /** Formats a value for the axis label. */
-  format: (value: number) => string;
+}
+
+/** Where a sample sits, as a percentage of the plot box. */
+export interface SamplePosition {
+  xPct: number;
+  yPct: number;
+}
+
+export interface AreaChart {
+  html: string;
+  /**
+   * One entry per sample, in the order given.
+   *
+   * Emitted alongside the markup rather than recomputed by the caller: the
+   * hover cursor has to land exactly on the drawn curve, and two
+   * implementations of the same scaling would drift apart the first time
+   * either changed.
+   */
+  positions: readonly SamplePosition[];
 }
 
 const W = 600;
 const H = 150;
 const PAD = { top: 12, right: 6, bottom: 6, left: 6 };
+
+const EMPTY: AreaChart = { html: '', positions: [] };
 
 /** Escapes text destined for HTML. */
 function esc(s: string): string {
@@ -38,33 +62,36 @@ function esc(s: string): string {
 }
 
 /**
- * Renders samples as SVG markup, or an empty string when there is nothing yet
- * to draw — a caller should leave the space blank rather than show an axis
- * with no data on it.
+ * Renders samples as markup plus their positions, or nothing at all when there
+ * is too little to draw — a caller should leave the space blank rather than
+ * show an axis with no data on it.
+ *
+ * Values are expected to be finite and non-negative; the caller filters, so
+ * that the positions returned here stay index-aligned with whatever richer
+ * per-sample data it holds.
  */
-export function renderAreaChart(samples: readonly number[], opts: AreaChartOptions): string {
-  const usable = samples.filter((v) => Number.isFinite(v) && v >= 0);
-  if (usable.length < 2) return '';
+export function renderAreaChart(samples: readonly number[], opts: AreaChartOptions): AreaChart {
+  if (samples.length < 2) return EMPTY;
 
   const plotW = W - PAD.left - PAD.right;
   const plotH = H - PAD.top - PAD.bottom;
 
   // Include the marker so its line cannot fall outside the drawing.
-  const peak = Math.max(...usable, opts.marker?.value ?? 0);
+  const peak = Math.max(...samples, opts.marker?.value ?? 0);
   // A little headroom, and never divide by zero on a flat trace.
   const ceiling = peak > 0 ? peak * 1.08 : 1;
 
-  const x = (i: number) => PAD.left + (i / (usable.length - 1)) * plotW;
+  const x = (i: number) => PAD.left + (i / (samples.length - 1)) * plotW;
   const y = (v: number) => PAD.top + plotH - (v / ceiling) * plotH;
 
-  const line = usable
-    .map((v, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(v).toFixed(1)}`)
-    .join(' ');
+  const points: Point[] = samples.map((v, i) => ({ x: x(i), y: y(v) }));
+  const line = monotonePath(points);
 
   // Close the path down to the baseline so the area can be filled.
-  const area = `${line} L${x(usable.length - 1).toFixed(1)},${(PAD.top + plotH).toFixed(
-    1,
-  )} L${x(0).toFixed(1)},${(PAD.top + plotH).toFixed(1)} Z`;
+  const baseline = PAD.top + plotH;
+  const area = `${line} L${x(samples.length - 1).toFixed(2)},${baseline.toFixed(
+    2,
+  )} L${x(0).toFixed(2)},${baseline.toFixed(2)} Z`;
 
   // The card stretches this drawing to whatever width and height it has, so
   // the marker LINE can live in the SVG (a stroke is scale-independent given
@@ -89,7 +116,7 @@ export function renderAreaChart(samples: readonly number[], opts: AreaChartOptio
     )}</span>`;
   }
 
-  return `<div class="trace__plot">
+  const html = `<div class="trace__plot">
     <svg viewBox="0 0 ${W} ${H}" class="trace__svg" preserveAspectRatio="none"
          role="img" aria-label="Bandwidth over the course of the test">
       <defs>
@@ -104,5 +131,15 @@ export function renderAreaChart(samples: readonly number[], opts: AreaChartOptio
       ${markerLine}
     </svg>
     ${markerLabel}
+    <div class="trace__cursor" hidden>
+      <span class="trace__cursor-line"></span>
+      <span class="trace__cursor-dot" style="--dot: ${opts.colour}"></span>
+    </div>
+    <div class="trace__tip" hidden></div>
   </div>`;
+
+  return {
+    html,
+    positions: points.map((p) => ({ xPct: (p.x / W) * 100, yPct: (p.y / H) * 100 })),
+  };
 }

@@ -414,10 +414,26 @@ test('the layout scales from a phone to a wide monitor', async ({ page }) => {
       1.01,
     );
 
-    const overflow = await page.evaluate(
-      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
-    );
-    expect(overflow, `page overflows horizontally at ${size.width}px`).toBeLessThanOrEqual(1);
+    // Reports the culprit, not just the number: "23px too wide" tells you
+    // nothing about which element did it.
+    const overflow = await page.evaluate(() => {
+      const doc = document.documentElement;
+      const by = doc.scrollWidth - doc.clientWidth;
+      if (by <= 1) return { by, culprit: '' };
+      const worst = [...document.querySelectorAll<HTMLElement>('body *')]
+        .map((el) => ({ el, right: el.getBoundingClientRect().right }))
+        .sort((a, b) => b.right - a.right)[0];
+      return {
+        by,
+        culprit: worst
+          ? `${worst.el.tagName.toLowerCase()}.${worst.el.className} reaches ${Math.round(worst.right)}`
+          : 'unknown',
+      };
+    });
+    expect(
+      overflow.by,
+      `page overflows horizontally at ${size.width}px — ${overflow.culprit}`,
+    ).toBeLessThanOrEqual(1);
 
     const label = await page.locator('.box__label').first().boundingBox();
     expect(label, `no box-plot label at ${size.width}px`).not.toBeNull();
@@ -444,6 +460,123 @@ test('the layout scales from a phone to a wide monitor', async ({ page }) => {
     spread,
     `box-plot labels rescale with the window: ${labelHeights.join(', ')}`,
   ).toBeLessThanOrEqual(2.5);
+});
+
+test('the step strip shows every request the profile will issue', async ({ page }) => {
+  // A bar says how far through you are; this says what the run is made of —
+  // that it is mostly latency pings, or that the big transfers have not
+  // started. The count comes from the profile, so it is known before the run.
+  await page.goto('/');
+
+  const strip = page.getByTestId('chevron-strip');
+  await expect(strip.locator('.chev').first()).toBeVisible();
+
+  const planned = Number(await page.locator('body').getAttribute('data-steps'));
+  expect(planned).toBeGreaterThan(0);
+  expect(await strip.locator('.chev').count()).toBe(planned);
+
+  await waitForCompletion(page);
+
+  // A finished run fills the strip completely; a partly filled strip after
+  // "Complete" would misreport what was measured.
+  expect(await strip.locator('.chev.is-done').count()).toBe(planned);
+  await expect(strip.locator('.chevrons')).toHaveAttribute('aria-valuenow', String(planned));
+});
+
+test('hovering a step explains it and reports what it measured', async ({ page }) => {
+  await page.goto('/');
+  await waitForCompletion(page);
+
+  // The LAST download stage, not the first: the first is the engine's warm-up
+  // round, which is exempt from the minimum-duration rule and contributes no
+  // bandwidth sample at all, so it has nothing to report.
+  await page.locator('.chev--download').last().hover();
+
+  const tip = page.getByTestId('step-tip');
+  await expect(tip).toBeVisible();
+  const text = (await tip.textContent()) ?? '';
+  expect(text).toMatch(/Download/);
+  expect(text, 'the reference shows a request count').toMatch(/Requests:\s*\d+/);
+  expect(text, 'and where in the run this is').toMatch(/Step:\s*\d+ of \d+/);
+  expect(text, 'a payload size, as the reference does').toMatch(/Payload:\s*[\d.]+\s*[kM]?B/);
+  expect(text, 'and what it actually measured').toMatch(/Measured:/);
+
+  // The whole stage lights up, not just the one chevron under the pointer.
+  expect(await page.locator('.chev.is-hovered').count()).toBeGreaterThanOrEqual(1);
+
+  // The warm-up says why it has no figure, rather than leaving a gap that
+  // reads as a measurement that failed.
+  await page.locator('.chev--download').first().hover();
+  await expect(tip).toContainText(/warm-up/i);
+});
+
+test('hovering a trace reports the sample under the pointer', async ({ page }) => {
+  // The engine records the payload size, the round trip and the request
+  // duration for every sample. The headline uses none of that; a point on the
+  // curve is where it belongs.
+  await page.goto('/');
+  await waitForCompletion(page);
+
+  const chart = page.getByTestId('download-chart');
+  const box = await chart.boundingBox();
+  expect(box).not.toBeNull();
+  await page.mouse.move(box!.x + box!.width * 0.6, box!.y + box!.height * 0.5);
+
+  const tip = chart.locator('.trace__tip');
+  await expect(tip).toBeVisible();
+  const text = (await tip.textContent()) ?? '';
+  expect(text).toMatch(/Download/);
+  expect(text).toMatch(/Speed:\s*[\d.]+\s*[KMG]bps/);
+  expect(text).toMatch(/Payload:/);
+
+  // The cursor lands on the curve rather than floating anywhere.
+  await expect(chart.locator('.trace__cursor')).toBeVisible();
+
+  // And it goes away again.
+  await page.mouse.move(box!.x + box!.width / 2, box!.y - 40);
+  await expect(tip).toBeHidden();
+});
+
+test('the trace is drawn as a curve, not a polyline', async ({ page }) => {
+  // Monotone cubic: smooth, but incapable of overshooting between samples. A
+  // spline that overshoots would draw a bandwidth dip below zero on a ramp.
+  await page.goto('/');
+  await waitForCompletion(page);
+
+  const d = await page.locator('#download-chart path').nth(1).getAttribute('d');
+  expect(d, 'no path drawn').not.toBeNull();
+  expect(d, 'the trace should be cubic segments').toMatch(/C-?[\d.]+,/);
+});
+
+test('the profile is selectable, and the run reports the one it used', async ({ page }) => {
+  // Every stored run said "lan-1g" because the profile was fixed server-side.
+  // It is a real choice now, and the transfer sizes differ between profiles,
+  // so the label has to be the truth.
+  await page.goto('/');
+
+  const picker = page.getByTestId('profile-select');
+  await expect(picker).toBeVisible();
+
+  const values = await picker
+    .locator('option')
+    .evaluateAll((os) => os.map((o) => (o as HTMLOptionElement).value));
+  expect(values, 'the shipped profiles should be offered').toContain('lan-1g');
+  expect(values, 'and automatic selection').toContain('__auto__');
+
+  await waitForCompletion(page);
+  await expect(page.locator('body')).toHaveAttribute('data-profile', 'quick');
+
+  // Choosing another profile re-runs with it rather than relabelling the old
+  // numbers, which would be the worst of both.
+  await picker.selectOption('lan-1g');
+  await expect
+    .poll(async () => page.locator('body').getAttribute('data-profile'), { timeout: 60_000 })
+    .toBe('lan-1g');
+  await waitForCompletion(page);
+  await expect(page.getByTestId('profile')).toContainText('lan-1g');
+
+  // And it is remembered, so the next visit does not silently revert.
+  expect(await page.evaluate(() => localStorage.getItem('speedtest.profile'))).toBe('lan-1g');
 });
 
 test('a running test can be paused and resumed', async ({ page }) => {

@@ -24,9 +24,12 @@
 
   --radius: 10px;
   --gap: 16px;
-  /* Wide enough for three headline columns on a desktop, narrow enough that
-     the detail tables stay a readable measure on a 4K monitor. */
-  --page-max: 1320px;
+  /* speed.cloudflare.com caps at 1200px and centres, at every width above
+     that — at 1920 it leaves 360px of margin each side. Deliberately, and it
+     is right: a headline metric at each end of a 2560px screen is unreadable
+     as one row, and prose lines become unusable. This goes a little wider
+     than the reference and stops there. */
+  --page-max: 1440px;
   /* The live traces grow with the window rather than staying a fixed sliver:
      a tall window shows more of the shape of a run, which is the whole point
      of drawing it. */
@@ -74,7 +77,11 @@ body {
 .page__actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 12px;
+  /* Lets the profile picker shrink: a <select> is as wide as its widest
+     option by default, which pushed the whole page past a phone's viewport. */
+  min-width: 0;
 }
 
 .phase {
@@ -105,20 +112,6 @@ body {
   cursor: default;
 }
 
-.progress {
-  height: 3px;
-  background: var(--border);
-  border-radius: 2px;
-  overflow: hidden;
-}
-
-.progress__bar {
-  height: 100%;
-  width: 0;
-  background: var(--accent);
-  transition: width 0.3s ease;
-}
-
 .error {
   margin: 0;
   padding: 12px 14px;
@@ -129,36 +122,51 @@ body {
   font-size: 0.9rem;
 }
 
-/* --- headline: two traces plus a vitals column ---------------------------- */
+/* --- the band across the top ---------------------------------------------
 
-.headline {
+   One panel rather than three cards, matching the reference: the top of the
+   page should read as a single instrument, not as separate readouts. The 1px
+   grid gap over a border-coloured background draws the dividers, which means
+   they follow the layout at every breakpoint without a rule per case. */
+
+.band {
   display: grid;
   /* minmax(0, ...) rather than 1fr: a grid track's default minimum is its
      content, so a wide SVG would push the column out and overflow the page
      instead of shrinking. */
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(230px, 0.58fr);
-  gap: var(--gap);
-  align-items: stretch;
-}
-
-/* Below three comfortable columns the vitals drop under the traces and lay
-   themselves out in a row. Stacking everything here instead would give up the
-   side-by-side download/upload comparison far earlier than it needs to. */
-@media (max-width: 1100px) {
-  .headline { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-}
-
-@media (max-width: 620px) {
-  .headline { grid-template-columns: minmax(0, 1fr); }
-}
-
-.trace,
-.vitals {
-  background: var(--bg-raised);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(220px, 0.55fr);
+  gap: 1px;
+  background: var(--border);
   border: 1px solid var(--border);
   border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.band__cell {
+  background: var(--bg-raised);
   padding: 16px 18px;
   min-width: 0;
+}
+
+/* Two columns, vitals underneath spanning both. The reference does the same
+   thing at this width, and it keeps download and upload comparable side by
+   side for far longer than stacking everything would. */
+@media (max-width: 1200px) {
+  .band {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .vitals {
+    grid-column: 1 / -1;
+  }
+}
+
+/* One column. The reference switches here too (below its 768px tablet
+   breakpoint), and below this a two-across trace is too narrow to read. */
+@media (max-width: 768px) {
+  .band {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .trace {
@@ -229,7 +237,11 @@ body {
   position: absolute;
   left: 4px;
   transform: translateY(-100%);
-  padding-bottom: 2px;
+  /* A chip, because the label sits over the curve it describes and dim text
+     on a filled gradient is unreadable. */
+  background: rgba(13, 17, 23, 0.72);
+  border-radius: 3px;
+  padding: 0 4px 1px;
   font-size: 0.65rem;
   font-family: var(--font-num);
   color: var(--text-dim);
@@ -243,6 +255,24 @@ body {
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+/* Spanning the full band, so lay the three out across it rather than leaving
+   a tall column of whitespace. Must come after the rule above: same
+   specificity, so source order decides. */
+@media (max-width: 1200px) {
+  .vitals {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 14px var(--gap);
+    align-items: start;
+  }
+}
+
+@media (max-width: 480px) {
+  .vitals {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .vital__value {
@@ -277,38 +307,135 @@ body {
 
 .vital__loaded span:nth-of-type(2) { margin-right: 8px; }
 
-.vital__meta {
-  margin: auto 0 0;
-  font-size: 0.7rem;
-  color: var(--text-dim);
+/* --- hover cursor and tooltips -------------------------------------------
+
+   Both tooltips are HTML rather than SVG. The traces are stretched to fill
+   their card (`preserveAspectRatio="none"`), which squashes any text drawn
+   inside them by whatever the current aspect ratio happens to be. */
+
+.trace__cursor {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.trace__cursor-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--text-dim);
+  opacity: 0.55;
+}
+
+.trace__cursor-dot {
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--dot, var(--text));
+  border: 2px solid var(--bg-raised);
+  transform: translate(-50%, -50%);
+}
+
+.tip,
+.trace__tip,
+.steps__tip {
+  position: absolute;
+  z-index: 3;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
   font-family: var(--font-num);
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: var(--text);
+  pointer-events: none;
+  white-space: nowrap;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
 }
 
-/* Once the vitals sit under the traces rather than beside them they have a
-   full row to use, so lay them out across it instead of leaving a tall column
-   of whitespace. This block has to come after the rules above rather than
-   living with the `.headline` breakpoint — same specificity, so source order
-   decides. */
-@media (max-width: 1100px) {
-  .vitals {
-    grid-column: 1 / -1;
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-    gap: 14px var(--gap);
-    align-items: start;
-  }
-
-  .vital__meta {
-    grid-column: 1 / -1;
-    margin: 0;
-  }
+.tip__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  margin-bottom: 3px;
 }
 
-/* Single column: back to a stack, where a row of three would be 100px wide. */
-@media (max-width: 620px) {
-  .vitals {
-    grid-template-columns: minmax(0, 1fr);
-  }
+.tip__swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--swatch, var(--accent));
+}
+
+.tip__key {
+  color: var(--text-dim);
+}
+
+.tip__value {
+  font-weight: 600;
+}
+
+/* --- the step strip -------------------------------------------------------
+
+   One chevron per request the profile will issue, so the shape of the run is
+   visible before it starts: you can see that a run is mostly latency pings,
+   or that the large transfers have not begun. A bar cannot say that. */
+
+.steps {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.steps__controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* The flex rules belong on `.chevrons`, which is the element the renderer
+   emits — `.steps__strip` is only its host. Put them on the host and the
+   chevrons stay inline spans, which ignore width and height entirely. */
+.chevrons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  align-items: center;
+}
+
+.chev {
+  width: 9px;
+  height: 20px;
+  flex: 0 0 auto;
+  background: var(--border);
+  /* Drawn rather than typed: a glyph would depend on a font being present and
+     would not stay crisp at this size. */
+  clip-path: polygon(0 0, 55% 0, 100% 50%, 55% 100%, 0 100%, 45% 50%);
+  transition: background 0.2s, opacity 0.2s;
+}
+
+/* Colour arrives with completion, so the strip reads as filling up. Adjacent
+   stages of one type alternate shade, or three downloads in a row would look
+   like one long block. */
+.chev--latency.is-done { background: #3b82f6; }
+.chev--latency.is-done[data-shade="1"] { background: #7dabfb; }
+.chev--download.is-done { background: var(--accent); }
+.chev--download.is-done[data-shade="1"] { background: #f9b45f; }
+.chev--upload.is-done { background: var(--upload); }
+.chev--upload.is-done[data-shade="1"] { background: #c9aaff; }
+.chev--packetLoss.is-done { background: #c2410c; }
+.chev--packetLossUnderLoad.is-done { background: #9a3412; }
+
+/* Outline would be clipped away by the chevron shape, so lift the whole
+   hovered stage instead. */
+.chev.is-hovered {
+  filter: brightness(1.6);
 }
 
 /* --- packet-loss bar ------------------------------------------------------ */
@@ -403,14 +530,36 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .progress__bar,
-  .btn {
+  .btn,
+  .chev {
     transition: none;
   }
 }
 
 
 /* --- history page --------------------------------------------------------- */
+
+.picker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.picker .select {
+  min-width: 0;
+  max-width: 100%;
+  /* Not `auto`: on a narrow screen the option text must be allowed to clip
+     rather than set the width of the page. */
+  flex: 0 1 auto;
+}
+
+.picker__label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-dim);
+}
 
 .select {
   background: var(--bg-raised);

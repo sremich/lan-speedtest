@@ -72,6 +72,8 @@ most one sample inside a short LAN transfer, and jitter needs two.
 | `measure_upload_loaded_latency` | Measure latency during upload |
 | `loaded_request_min_duration` | See sizing note 2 |
 | `loaded_latency_throttle` | See sizing note 3 |
+| `nominal_bps` | The link speed these transfer sizes were chosen for |
+| `auto_selectable` | Whether `Auto` in the picker may choose this profile |
 
 ## Server keys
 
@@ -82,6 +84,31 @@ most one sample inside a short LAN transfer, and jitter needs two.
 | `max_transfer_bytes` | 2 GiB | Hard per-request ceiling. Startup fails if a profile exceeds it |
 | `download_chunk_bytes` | 4 MiB | Shared payload buffer, sliced per request |
 | `static_dir` | `static` | Built front-end assets |
+
+## Choosing a profile
+
+The profile is no longer fixed for everyone. `server.profile` (or
+`SPEEDTEST_PROFILE`) is the **default**, and a picker in the page lets a client
+choose another; the choice is remembered per browser and recorded with every
+stored run, so mixed-profile history stays honest.
+
+**`Auto`** measures the link with one short transfer and then picks the largest
+`auto_selectable` profile whose `nominal_bps` is within a factor of two of what
+it measured. The factor of two is deliberate: a single stream reaches only part
+of a fast link, so requiring the full nominal rate would always choose the
+smaller profile.
+
+This matters more than it looks. The profiles differ in transfer size, and a
+size chosen for the wrong link measures the wrong thing — 25 MB on 10 GbE
+finishes in about 20 ms, which is mostly request overhead rather than
+throughput.
+
+Mark only real link profiles `auto_selectable`. `quick` and `e2e-packetloss`
+are sized for loopback and would badly under-measure any real client.
+
+`nominal_bps` has a second job: a unit test checks each profile's transfer
+sizes against it, so the sizing rules above are enforced rather than merely
+documented.
 
 ## TURN
 
@@ -115,6 +142,10 @@ See [TURN and Packet Loss](TURN-and-Packet-Loss.md).
 | `SPEEDTEST_TURN_USER` | `turn.user` |
 | `SPEEDTEST_TURN_PASS` | `turn.pass` |
 | `SPEEDTEST_LOG` | Log filter (`info`, `debug`, …) |
+
+`GET /api/profiles` lists what the picker can offer; `GET /api/profile?name=X`
+hands out one by name and refuses an unknown name rather than quietly serving
+the default.
 
 Unknown keys in the TOML file are a hard error rather than being ignored — a
 typo must not leave you believing a setting took effect. The one exception is

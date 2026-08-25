@@ -12,26 +12,22 @@
       <header class="page__head">
         <h1 class="page__title" id="site-name" data-testid="site-name">LAN Speed Test</h1>
         <div class="page__actions">
-          <span class="phase" id="phase" data-testid="phase">Starting…</span>
+          <label class="picker">
+            <span class="picker__label">Profile</span>
+            <select class="select" id="profile-select" data-testid="profile-select"></select>
+          </label>
           <a class="btn" id="history-link" data-testid="history-link" href="/history.html" hidden>
             History
           </a>
-          <button class="btn" id="pause" data-testid="pause" type="button">Pause</button>
-          <button class="btn" id="restart" data-testid="restart" type="button" disabled>
-            Retest
-          </button>
         </div>
       </header>
 
-      <div class="progress" role="progressbar" aria-label="Test progress">
-        <div class="progress__bar" id="progress"></div>
-      </div>
-
       <p class="error" id="error" data-testid="error" hidden></p>
 
-      <!-- Headline: the two bandwidth traces, then the latency column. -->
-      <section class="headline" aria-label="Results">
-        <article class="trace">
+      <!-- One band across the top: both traces and the vitals, divided by
+           hairlines rather than split into separate cards. -->
+      <section class="band" aria-label="Results">
+        <article class="band__cell trace">
           <h2 class="trace__label">Download</h2>
           <p class="trace__value">
             <span id="download" data-testid="download">—</span
@@ -40,7 +36,7 @@
           <div class="trace__chart" id="download-chart" data-testid="download-chart"></div>
         </article>
 
-        <article class="trace">
+        <article class="band__cell trace">
           <h2 class="trace__label">Upload</h2>
           <p class="trace__value">
             <span id="upload" data-testid="upload">—</span
@@ -49,7 +45,7 @@
           <div class="trace__chart" id="upload-chart" data-testid="upload-chart"></div>
         </article>
 
-        <article class="vitals">
+        <div class="band__cell vitals">
           <div class="vital">
             <h2 class="vital__label">Latency</h2>
             <p class="vital__value" id="latency" data-testid="latency">—</p>
@@ -76,9 +72,20 @@
             <h2 class="vital__label">Packet Loss</h2>
             <p class="vital__value" id="packet-loss" data-testid="packet-loss">—</p>
           </div>
+        </div>
+      </section>
 
-          <p class="vital__meta" id="measured-at" data-testid="measured-at"></p>
-        </article>
+      <!-- The run, step by step: one chevron per request the profile issues. -->
+      <section class="steps" aria-label="Progress">
+        <div class="steps__controls">
+          <button class="btn" id="pause" data-testid="pause" type="button">Pause</button>
+          <button class="btn" id="restart" data-testid="restart" type="button" disabled>
+            Retest
+          </button>
+          <span class="phase" id="phase" data-testid="phase">Starting…</span>
+        </div>
+        <div class="steps__strip" id="chevrons" data-testid="chevron-strip"></div>
+        <div class="steps__tip" id="step-tip" data-testid="step-tip" hidden></div>
       </section>
 
       <section class="aim" aria-label="Quality ratings">
@@ -121,6 +128,7 @@
 
       <footer class="page__foot">
         <span id="connection" data-testid="connection"></span>
+        <span id="measured-at" data-testid="measured-at"></span>
         <span id="profile" data-testid="profile"></span>
         <span id="build" data-testid="build"></span>
       </footer>

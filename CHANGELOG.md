@@ -8,6 +8,79 @@ commit, then tag.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-08-25
+
+The measurement made legible.
+
+### Added
+
+- **A step strip instead of a progress bar.** One chevron per request the
+  profile will issue, grouped and coloured by stage, drawn *before* the run
+  starts — so the shape of the work is visible up front rather than only in
+  hindsight. Hovering gives the stage's payload size, request count, position
+  in the profile, and what it measured.
+
+  The model was checked against the reference rather than guessed: the engine's
+  own default profile has 25 stages whose fourth entry is
+  `{ type: 'download', bytes: 1e5, count: 9 }`, which is exactly the
+  "Payload: 100 kB, Requests: 9, Step: 4 of 25" speed.cloudflare.com shows on
+  hover.
+
+  A warm-up round is labelled as one. It is exempt from
+  `loaded_request_min_duration` and its samples are excluded from the bandwidth
+  figures, so it reports no measurement — which looked like a failure until it
+  said why.
+
+- **Hover detail on the traces.** A guide line, a dot on the curve, and what
+  that individual request was: speed, payload size, round trip, and how long it
+  took. The engine has recorded all of this per sample since the beginning and
+  none of it was reachable.
+
+- **A profile picker, with `Auto`.** The profile was fixed server-side, which
+  is why every stored run said `lan-1g`. It is now a choice, remembered per
+  browser and still recorded with each run. `Auto` measures the link with one
+  short transfer and picks the largest `auto_selectable` profile within a
+  factor of two of what it measured — a single stream reaches only part of a
+  fast link, so demanding the full nominal rate would always choose the smaller
+  profile.
+
+  New `nominal_bps` and `auto_selectable` profile keys. `nominal_bps` also
+  replaces the hard-coded table in the profile-sizing test, which had been free
+  to drift away from the profiles it was checking.
+
+- `GET /api/profiles`, and `GET /api/profile?name=`. An unknown name is refused
+  rather than quietly served the default, which would let a stale choice
+  measure something other than what it says.
+
+### Changed
+
+- **Traces are drawn as monotone cubic curves.** Smooth, but constrained to
+  stay within the range of each pair of samples. An ordinary cardinal or
+  Catmull-Rom spline overshoots, so a link ramping from nothing to 900 Mbps
+  would be drawn dipping below zero on the way up and peaking above the fastest
+  sample ever recorded — smooth, and false.
+
+- **The headline is one band across the top**, divided by hairlines, rather
+  than three separate cards. This follows the reference's arrangement, checked
+  by measuring speed.cloudflare.com at six viewport widths rather than from
+  screenshots.
+
+  Worth recording, because it inverts the obvious assumption: **the reference
+  never uses the full window.** It caps at 1200px and centres, at every width
+  above that — at 1920 it leaves 360px of margin each side. This page now caps
+  at 1440, slightly wider than the reference, and steps 3 columns → 2 (at
+  1200px) → 1 (at 768px).
+
+- The 90th-percentile label sits on a chip, because dim text over a filled
+  gradient is unreadable.
+
+### Fixed
+
+- The profile picker's widest option set the width of the whole page, pushing
+  it past a phone's viewport by 23px. Caught by the scaling test added in
+  1.1.0, which now also names the offending element rather than only reporting
+  how far over it went.
+
 ## [1.1.0] - 2026-08-25
 
 A name of its own, and a layout that survives being resized.
@@ -390,7 +463,8 @@ milestone increments.
 - Tier-4 hardware validation outstanding; releases stay pre-release until it
   passes.
 
-[Unreleased]: https://github.com/sremich/self-hosted-cloudflare-speedtest/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/sremich/self-hosted-cloudflare-speedtest/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v1.2.0
 [1.1.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v1.1.0
 [1.0.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v1.0.0
 [0.6.1]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v0.6.1

@@ -290,6 +290,85 @@ async fn status_exposes_version_and_git_sha() {
 }
 
 #[tokio::test]
+async fn profiles_are_listed_for_the_picker_and_selectable_by_name() {
+    let base = serve(
+        "
+profile = 'test'
+[server]
+static_dir = 'does-not-exist'
+[profiles.test]
+description = 'the default'
+nominal_bps = 1000000000.0
+auto_selectable = true
+measurements = [{ type = 'download', bytes = 1000, count = 2 }]
+[profiles.other]
+description = 'the other one'
+measurements = [{ type = 'latency', numPackets = 7 }]
+",
+    )
+    .await;
+
+    let list: serde_json::Value = client()
+        .get(format!("{base}/api/profiles"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(list["default"], "test");
+    let names: Vec<&str> = list["profiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["other", "test"]);
+    let test_entry = &list["profiles"][1];
+    assert_eq!(test_entry["autoSelectable"], true);
+    assert_eq!(test_entry["nominalBps"], 1_000_000_000.0);
+    // Not marked auto-selectable, so automatic selection must not offer it.
+    assert_eq!(list["profiles"][0]["autoSelectable"], false);
+
+    // No name asked for: the server's default.
+    let default: serde_json::Value = client()
+        .get(format!("{base}/api/profile"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(default["profile"], "test");
+
+    // Asking by name hands out that profile, and reports it as the one in
+    // use — history records this value, so it has to be the truth.
+    let other: serde_json::Value = client()
+        .get(format!("{base}/api/profile?name=other"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(other["profile"], "other");
+    assert_eq!(other["engineConfig"]["measurements"][0]["numPackets"], 7);
+}
+
+#[tokio::test]
+async fn an_unknown_profile_name_is_refused_rather_than_silently_defaulted() {
+    // Quietly serving the default would let a stale bookmark measure something
+    // other than what it says it is measuring.
+    let base = serve(CONFIG).await;
+    let res = client()
+        .get(format!("{base}/api/profile?name=../../etc/passwd"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 400);
+}
+
+#[tokio::test]
 async fn status_carries_the_configured_site_name() {
     // The heading is decided server-side so that renaming an installation is
     // a config change and a restart, not a rebuild.

@@ -18,6 +18,36 @@ On a LAN the absolute latency figures are largely browser quantisation — see
 [Troubleshooting](Troubleshooting.md) — but the *difference* between idle and
 loaded remains meaningful even when both are near the resolution floor.
 
+## The step strip
+
+The row of chevrons under the controls is one chevron per **request** the
+profile will issue, grouped and coloured by stage: blue for latency, orange for
+download, purple for upload, red for packet loss. Adjacent stages of the same
+type alternate shade, so three downloads in a row do not read as one block.
+
+It is drawn before the run starts, so the shape of the work is visible up
+front — you can see that a run is mostly latency pings, or that the large
+transfers have not begun. Hovering a chevron gives the stage's payload size,
+its request count, its position in the profile, and, once it has finished, what
+it measured.
+
+A stage marked **warm-up** is the engine's initial probe. It is exempt from
+`loaded_request_min_duration` and its samples are left out of the bandwidth
+figures entirely, so it reports no measurement — by design, not by failure.
+
+## The live traces
+
+Each direction is drawn as a filled area over its samples, with the reported
+90th percentile marked. Hovering a point gives that individual request: its
+speed, its payload size, the round trip, and how long the request took.
+
+The curve is a **monotone cubic** (Fritsch–Carlson), not an ordinary spline.
+The distinction matters: a cardinal or Catmull-Rom spline overshoots between
+points, so a link ramping from nothing to 900 Mbps would be drawn dipping below
+zero on the way up and peaking above the fastest sample ever recorded. This
+curve is constrained to stay within the range of each pair of samples, so it
+smooths without inventing.
+
 ## Suitability ratings
 
 Three use cases — streaming, gaming and video calls — scored by the engine from
