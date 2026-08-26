@@ -49,6 +49,20 @@ echo "==> replacing wiki contents from $SRC"
 # This is a fresh clone, so there is nothing untracked to preserve.
 (cd "$work/wiki" && git ls-files -z | xargs -0 -r rm -f)
 cp "$SRC"/*.md "$work/wiki/"
+
+# Strip the .md from internal links, because the two renderers disagree.
+#
+# In the repository, `[Configuration](Configuration.md)` is correct: it points
+# at the sibling file, and docs/wiki is meant to be readable where it lives.
+# On the wiki the same link is wrong — GitHub reads a .md suffix as a request
+# for the raw file and 302s to raw.githubusercontent.com, handing the reader
+# plain markdown source instead of the rendered page.
+#
+# Translating here keeps both right; changing the source would fix the wiki by
+# breaking in-repo browsing. The character class excludes `/` and `:`, so
+# absolute URLs and images/ paths are left alone, and the optional group keeps
+# any #anchor attached.
+sed -i -E 's/\]\(([A-Za-z][A-Za-z0-9._-]*)\.md(#[^)]*)?\)/](\1\2)/g' "$work/wiki"/*.md
 # nullglob so an empty (or .png-less) images/ leaves the glob expanding to
 # nothing rather than to a literal path that `cp` fails on — which under
 # `set -e` would abort after the delete above had already run.
