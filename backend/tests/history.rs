@@ -852,30 +852,61 @@ async fn a_note_is_capped_in_characters_and_refused_for_a_missing_run() {
 }
 
 #[tokio::test]
-async fn metrics_is_absent_unless_it_is_turned_on() {
-    // The body names every client that has run a test. That is more than an
-    // unauthenticated endpoint should hand out by default, so the route is not
-    // mounted at all rather than mounted and refusing.
-    let history = Arc::new(History::in_memory().unwrap());
-    let base = serve_with(CONFIG, Some(history)).await;
+async fn metrics_is_refused_unless_it_is_turned_on_even_when_static_files_exist() {
+    // The body names every client that has run a test — more than an
+    // unauthenticated endpoint should hand out by default.
+    //
+    // The static directory is real here, and that is the entire point of this
+    // test. `/metrics` used to be left unrouted when disabled, which looks
+    // equivalent to refusing and is not: the SPA fallback answers anything
+    // unrouted, so a deployment that actually serves the front end returned
+    // 200 and an HTML page. The first version of this test pointed at a
+    // directory that did not exist, so the fallback failed and produced the
+    // 404 it was hoping for — passing while testing nothing.
+    let dir = std::env::temp_dir().join(format!("speedtest-static-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("index.html"), "<!doctype html><title>app</title>").unwrap();
 
-    client()
-        .post(format!("{base}/api/results"))
-        .json(&submission(1.0e9, "lan-1g"))
+    let config = format!(
+        "
+profile = 'test'
+[server]
+static_dir = '{}'
+[profiles.test]
+measurements = [ {{ type = 'download', bytes = 1000, count = 1 }} ]
+",
+        dir.display()
+    );
+
+    let history = Arc::new(History::in_memory().unwrap());
+    let base = serve_with(&config, Some(history)).await;
+
+    // The fallback really is serving, so a 404 below is a decision and not an
+    // accident of a missing directory.
+    let shell = client()
+        .get(format!("{base}/no-such-page"))
         .send()
         .await
         .unwrap();
+    assert_eq!(shell.status(), 200, "the SPA fallback should be answering");
 
     let res = client()
         .get(format!("{base}/metrics"))
         .send()
         .await
         .unwrap();
-    assert_ne!(
+    assert_eq!(
         res.status(),
-        200,
-        "metrics must not be served without being asked for"
+        404,
+        "metrics must be refused, not answered by the static fallback"
     );
+    let body = res.text().await.unwrap();
+    assert!(
+        !body.contains("<!doctype html"),
+        "a scrape must not receive the app shell: {body}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]

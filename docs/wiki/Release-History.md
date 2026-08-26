@@ -5,6 +5,14 @@ pre-releases; from 1.0.0 they are full releases. The 10 GbE saturation check
 was waived, and "no external traffic" is proven by an end-to-end test on every
 push rather than by a manual packet capture.
 
+## 1.5.1
+
+- **`/metrics` answered with the app shell instead of 404 when disabled.** The
+  route was left unmounted, and the SPA fallback answers anything unrouted — so
+  a scrape read an HTML page as an exposition. Always routed now, refusing from
+  the handler. The test that should have caught it pointed `static_dir` at a
+  missing directory, so the fallback failed and produced the 404 it wanted.
+
 ## 1.5.0
 
 What measured it, whether to measure at all, and what changed.

@@ -6,6 +6,24 @@ three-part X.Y.Z (bugfix +0.0.1, minor +0.1.0, major +1.0.0). On release,
 move the Unreleased entries into a new version section, bump `VERSION`,
 commit, then tag.
 
+## [1.5.1] - 2026-08-26
+
+### Fixed
+
+- **`/metrics` returned the app shell instead of a 404 when metrics were
+  turned off.** The route was left unmounted rather than mounted and
+  refusing — which looks equivalent and is not, because the SPA fallback
+  answers anything unrouted. On a deployment that actually serves the front
+  end, a scrape received `200 text/html` and an HTML page, and would have
+  reported a permanently healthy target with no series in it. It is now always
+  routed and returns 404 from the handler when disabled.
+
+  The test that was meant to cover this passed for the wrong reason: its
+  config pointed `static_dir` at a directory that did not exist, so the
+  fallback failed and produced the 404 it was hoping for. It now writes a real
+  static directory, asserts the fallback is genuinely answering, and only then
+  asserts that `/metrics` is refused.
+
 ## [1.5.0] - 2026-08-26
 
 What measured it, whether to measure at all, and what changed.
@@ -697,7 +715,8 @@ milestone increments.
 - Tier-4 hardware validation outstanding; releases stay pre-release until it
   passes.
 
-[Unreleased]: https://github.com/sremich/self-hosted-cloudflare-speedtest/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/sremich/self-hosted-cloudflare-speedtest/compare/v1.5.1...HEAD
+[1.5.1]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v1.5.1
 [1.5.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v1.5.0
 [1.4.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v1.4.0
 [1.3.1]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v1.3.1

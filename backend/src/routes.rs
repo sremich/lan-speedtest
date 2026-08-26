@@ -167,12 +167,7 @@ pub fn router(state: AppState) -> Router {
     // SPA-style fallback so a deep link still resolves to the app shell.
     let statics = ServeDir::new(&static_dir).fallback(ServeFile::new(&index));
 
-    // Only mounted when asked for: the body names every client that has run a
-    // test, which is more than an unauthenticated endpoint should offer by
-    // default. Absent rather than 403 when off — there is nothing there.
-    let metrics_route = state.config.server.metrics;
-
-    let mut router = Router::new()
+    Router::new()
         .route("/__down", get(down))
         .route("/__up", post(up))
         .route("/api/status", get(status))
@@ -184,24 +179,35 @@ pub fn router(state: AppState) -> Router {
         .route("/api/results/{id}/note", post(set_note))
         .route("/api/history", get(list_history))
         .route("/api/clients", get(list_clients))
-        .route("/api/clients/{ip}/name", post(set_client_name));
-
-    if metrics_route {
-        router = router.route("/metrics", get(metrics));
-    }
-
-    router.fallback_service(statics).with_state(state)
+        .route("/api/clients/{ip}/name", post(set_client_name))
+        // Always routed, and 404 from the handler when it is turned off.
+        //
+        // It used to be left unrouted instead, which looked equivalent and was
+        // not: the SPA fallback answers anything unrouted, so on a deployment
+        // that actually serves the front end `/metrics` returned 200 and the
+        // app shell. A scrape would have read an HTML page as an exposition
+        // and reported a permanently healthy target with no series in it.
+        .route("/metrics", get(metrics))
+        .fallback_service(statics)
+        .with_state(state)
 }
 
 /// Prometheus exposition of the most recent run per client.
-async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
+async fn metrics(State(state): State<AppState>) -> Response {
+    if !state.config.server.metrics {
+        // Off: say so definitively rather than letting the static fallback
+        // answer with the app shell.
+        return (StatusCode::NOT_FOUND, "metrics are not enabled").into_response();
+    }
+
     let Some(history) = state.history.as_ref() else {
         // Configured on, but nothing to report from. Still a valid body, so a
         // scrape sees a live target rather than an error it has to alert on.
         return (
             [(header::CONTENT_TYPE, PROMETHEUS_CONTENT_TYPE)],
             crate::metrics::render(VERSION, GIT_SHA, 0, &[]),
-        );
+        )
+            .into_response();
     };
 
     let total = history.count().unwrap_or(0);
@@ -210,6 +216,7 @@ async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
         [(header::CONTENT_TYPE, PROMETHEUS_CONTENT_TYPE)],
         crate::metrics::render(VERSION, GIT_SHA, total, &latest),
     )
+        .into_response()
 }
 
 /// The version Prometheus itself advertises for the text format.
