@@ -533,10 +533,7 @@ mod tests {
 
     #[test]
     fn reverse_names_follow_the_arpa_conventions() {
-        assert_eq!(
-            reverse_name(ip("10.42.7.50")),
-            "50.7.42.10.in-addr.arpa"
-        );
+        assert_eq!(reverse_name(ip("10.42.7.50")), "50.7.42.10.in-addr.arpa");
         assert!(reverse_name(ip("2001:db8::1")).ends_with(".ip6.arpa"));
         // 32 nibbles, each with its dot, plus the suffix.
         assert_eq!(

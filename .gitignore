@@ -1,12 +1,16 @@
 # --- Local-only context (OneDrive-synced, never on GitHub) ---
-/source-files/*
-!/source-files/.gitkeep
+# Working notes. These describe how the project is built, not how it is used,
+# and the repository is not the place for them.
+/source-files/
 /HANDOVER.md
 /CLAUDE.md
 /DECISIONS.md
+/.claude/
 
-# Real provisioning target: names the hypervisor and the guest address.
-/provisioning/proxmox/provision.toml
+# Proxmox provisioning: out of scope for the project. The service is a
+# container and a coturn relay; how the guest hosting them comes to exist is a
+# separate concern, kept locally rather than shipped as if it were part of this.
+/provisioning/proxmox/
 
 # --- Secrets and runtime data ---
 .env
@@ -28,10 +32,9 @@ build/
 *.tsbuildinfo
 
 # --- Rust build output ---
-# `CARGO_TARGET_DIR` is exported out-of-tree for the backend (OneDrive), but the
-# provisioner commands in CLAUDE.md do not set it, so this directory is real.
+# Normally out-of-tree via `CARGO_TARGET_DIR`, but ignored here too so a build
+# run without it set does not offer the whole target directory up for commit.
 /backend/target/
-/provisioning/proxmox/target/
 
 # --- test artefacts ---
 /frontend/test-results/

@@ -100,9 +100,9 @@ Consequences:
   link can carry.
 - Payload sizes above ~250 MB cost more in decoding than they buy in
   measurement, which is why the profiles stop there.
-- A parallel-stream harness (planned for 0.6.0) is the way to get a raw
-  throughput number, and it must be reported separately so the two are never
-  confused.
+- A parallel-stream harness is the way to get a raw throughput number. The page
+  has one, on demand, and reports it separately so the two are never confused —
+  see [Reading the Results](Reading-the-Results.md#raw-throughput).
 
 ## Configuration keys that keep traffic on the LAN
 
@@ -157,3 +157,10 @@ Chrome, 1 ms in Firefox. On a LAN with sub-millisecond round trips, absolute
 latency and jitter are largely quantisation artefacts. Bandwidth and the
 *loaded-minus-idle* latency delta stay meaningful. The UI says so when the
 readings sit at the resolution floor rather than presenting them as precise.
+
+---
+
+See also: [Architecture](Architecture.md) ·
+[HTTP API](HTTP-API.md) ·
+[Configuration](Configuration.md) ·
+[Testing](Testing.md)

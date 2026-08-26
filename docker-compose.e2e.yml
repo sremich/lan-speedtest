@@ -1,6 +1,6 @@
 # Tier-2 support: a coturn relay so the packet-loss stage can actually run
 # under test. Not a deployment file — production runs coturn natively on the
-# guest (see DECISIONS.md and provisioning/coturn/).
+# guest (see provisioning/coturn/).
 #
 #   docker compose -f docker-compose.e2e.yml up -d
 #   SPEEDTEST_TURN_ENABLED=true SPEEDTEST_TURN_URI=127.0.0.1:3478 \

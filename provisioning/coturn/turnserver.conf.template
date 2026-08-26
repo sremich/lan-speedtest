@@ -6,7 +6,7 @@
 #
 # Why native rather than containerised: the relay needs a contiguous UDP port
 # range, and publishing ~40 UDP ports through Docker's userland proxy adds a
-# hop to the exact path we are trying to measure. See DECISIONS.md.
+# hop to the exact path we are trying to measure.
 #
 # Purpose: the engine's packet-loss stage opens two RTCPeerConnections in the
 # same browser tab and sends a UDP burst from one to the other *through this

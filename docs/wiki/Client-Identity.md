@@ -8,6 +8,12 @@ attributed by the only thing the server can observe for itself — the address
 the connection came from — and then labelled, as well as it can be, from three
 sources in order of authority.
 
+![Client names and addresses in the history](images/history-table.png)
+
+*One client has been given a name; the others show the address they connected
+from. The address is never replaced by the label — it is what correlates a run
+with a DHCP lease or a switch port.*
+
 ## What names a client
 
 | Source | Where it comes from | Wins over |
@@ -115,13 +121,23 @@ the honest answer to "why is it that number?" differs by kind:
 | link-local | Assigned without a DHCP server |
 | public | The connection reached the server from outside the LAN |
 
-## Permalinks
+## A note on personal data
 
-Every stored run keeps its samples, not just its headline, so
-`/result.html?id=N` redraws the run — the same traces, the same distributions,
-the same ratings — rather than summarising it. History rows link to it, and a
-finished run offers the link to itself.
+Stored runs carry the client's IP address, any hostname resolved for it, the
+browser's user agent and whatever was typed into a description; `/metrics`
+exposes the most recent run per client, keyed by address. Under the GDPR and UK
+GDPR an IP address is personal data.
 
-Sample blobs are size-capped. A run whose samples exceed the cap is stored
-without them: the measurement succeeded, and losing it over the size of its
-detail would not be an improvement.
+For a household or personal deployment that is unlikely to matter. If you run
+this somewhere it covers other people — an office, a club, a shared building —
+treat the stored addresses as personal data and handle them the way you already
+handle your other logs: a retention window (see
+[History and Metrics](History-and-Metrics.md#retention)) rather than keeping
+everything forever, and `/metrics` left off or firewalled unless something is
+actually scraping it.
+
+---
+
+See also: [History and Metrics](History-and-Metrics.md) ·
+[Configuration](Configuration.md) ·
+[Troubleshooting](Troubleshooting.md)

@@ -6,6 +6,55 @@ three-part X.Y.Z (bugfix +0.0.1, minor +0.1.0, major +1.0.0). On release,
 move the Unreleased entries into a new version section, bump `VERSION`,
 commit, then tag.
 
+## [Unreleased]
+
+Preparing the repository to be public.
+
+### Added
+
+- **`LICENSE` (MIT) and `THIRD-PARTY-NOTICES.md`.** The project had no licence
+  file and the README said it was not licensed for redistribution, which was
+  never the intention. The notices file carries the Cloudflare MIT notice in
+  full, the Rust dependency position, the base image's source offer, and what
+  is not redistributed. Both are copied into the image and served at `/LICENSE`
+  and `/THIRD-PARTY-NOTICES.md`.
+- **A non-affiliation statement**, in the README and the wiki. The project is
+  built on Cloudflare's open-source engine and says so; it must not read as a
+  Cloudflare product.
+- **Documentation screenshots**, produced by `frontend/scripts/screenshots.mjs`
+  against a real backend rather than mocked or drawn.
+- **New wiki pages**: Quick Start, HTTP API, and History and Metrics — the last
+  collecting material that had been split across three other pages.
+
+### Changed
+
+- **Renamed to `lan-speedtest` throughout** — the repository, the image
+  (`ghcr.io/sremich/lan-speedtest`), the crate, the binary and the Playwright
+  config. The previous name was derived from a private network and had no
+  business in a public repository.
+- **The documentation was reorganised.** Pages are grouped by what the reader
+  is trying to do, every page ends with where to go next, and the reference
+  material that had accumulated in whichever page it was first written in has
+  moved to where it belongs.
+
+### Removed
+
+- **The Proxmox provisioner (`provisioning/proxmox/`) is no longer part of the
+  project.** Standing up the host is a separate concern from the service that
+  runs on it. `provisioning/coturn/` stays, because the packet-loss stage needs
+  the relay.
+
+  The documentation consequence is larger than the code one: certificate
+  issuance and renewal were automated and verified by that tool, and are now
+  the operator's job. The application still terminates TLS itself and still
+  reads `SPEEDTEST_TLS_CERT_FILE` and `SPEEDTEST_TLS_KEY_FILE` — that is
+  unchanged. What is gone is the thing that obtained the certificate and made
+  sure something would renew it.
+- `CF_Token`, `ACME_EMAIL`, `ACME_DOMAIN`, `GHCR_USER` and `GHCR_TOKEN` from
+  `.env.example`. The first three were consumed only by the provisioner; the
+  last two existed to pull the image while the package was private, and a
+  public package needs no token.
+
 ## [1.5.1] - 2026-08-26
 
 ### Fixed
@@ -404,7 +453,7 @@ The first full release: deployed, serving, and no longer a pre-release.
 
 ### Deployed
 
-- Running on the deployment guest with an auto-renewing wildcard certificate, coturn for
+- Deployed to its own container with an auto-renewing certificate, coturn for
   the packet-loss stage, and history enabled. Packet loss confirmed at 0% from
   a browser on the LAN.
 
@@ -416,8 +465,7 @@ The first full release: deployed, serving, and no longer a pre-release.
   of that panel is knowing which machine you are testing from, so the client
   address is shown instead.
 
-- The 10 GbE saturation check that originally gated 1.0.0 is waived at
-  the maintainer's request. The criterion behind it had already been restated as "the
+- The 10 GbE saturation check that originally gated 1.0.0 is waived. The criterion behind it had already been restated as "the
   backend is provably not the bottleneck", which CI covers at 34-51 Gbps over
   loopback. The other tier-4 item is not waived: "no external traffic" is
   proven on every push by a test that drives a full run in a real browser and
@@ -715,17 +763,17 @@ milestone increments.
 - Tier-4 hardware validation outstanding; releases stay pre-release until it
   passes.
 
-[Unreleased]: https://github.com/sremich/self-hosted-cloudflare-speedtest/compare/v1.5.1...HEAD
-[1.5.1]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v1.5.1
-[1.5.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v1.5.0
-[1.4.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v1.4.0
-[1.3.1]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v1.3.1
-[1.3.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v1.3.0
-[1.2.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v1.2.0
-[1.1.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v1.1.0
-[1.0.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v1.0.0
-[0.6.1]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v0.6.1
-[0.6.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v0.6.0
-[0.5.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v0.5.0
-[0.4.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v0.4.0
-[0.3.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v0.3.0
+[Unreleased]: https://github.com/sremich/lan-speedtest/compare/v1.5.1...HEAD
+[1.5.1]: https://github.com/sremich/lan-speedtest/releases/tag/v1.5.1
+[1.5.0]: https://github.com/sremich/lan-speedtest/releases/tag/v1.5.0
+[1.4.0]: https://github.com/sremich/lan-speedtest/releases/tag/v1.4.0
+[1.3.1]: https://github.com/sremich/lan-speedtest/releases/tag/v1.3.1
+[1.3.0]: https://github.com/sremich/lan-speedtest/releases/tag/v1.3.0
+[1.2.0]: https://github.com/sremich/lan-speedtest/releases/tag/v1.2.0
+[1.1.0]: https://github.com/sremich/lan-speedtest/releases/tag/v1.1.0
+[1.0.0]: https://github.com/sremich/lan-speedtest/releases/tag/v1.0.0
+[0.6.1]: https://github.com/sremich/lan-speedtest/releases/tag/v0.6.1
+[0.6.0]: https://github.com/sremich/lan-speedtest/releases/tag/v0.6.0
+[0.5.0]: https://github.com/sremich/lan-speedtest/releases/tag/v0.5.0
+[0.4.0]: https://github.com/sremich/lan-speedtest/releases/tag/v0.4.0
+[0.3.0]: https://github.com/sremich/lan-speedtest/releases/tag/v0.3.0

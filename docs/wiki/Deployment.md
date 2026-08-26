@@ -1,87 +1,57 @@
 # Deployment
 
-One command, from nothing to serving. Run it again and nothing changes.
+What a permanent installation needs beyond [Quick Start](Quick-Start.md): a
+host, the container, a relay, TLS, and a firewall.
 
-## What provisioning does
+The project ships the application and the relay configuration. It does not ship
+anything that creates or manages the host — that is deliberately out of scope,
+and any Debian-family machine with Docker will do: a VM, an LXC guest, a spare
+mini PC.
 
-1. Creates the LXC with a **pinned MAC**, DHCP networking, `nesting=1` for
-   Docker, and an ownership tag.
-2. Installs base packages, Docker (from upstream, for the compose plugin), and
-   coturn.
-3. Issues the wildcard certificate over ACME DNS-01 and installs a weekly
-   renewal — then **verifies the schedule actually exists**.
-4. Deploys the application with compose and waits for it to answer its own
-   health check.
+## The host
 
-## Prerequisites
+Give it real resources. **4 cores and 4 GB is a sensible floor.** This is the
+one component whose slowness is indistinguishable from a slow network — a
+backend that cannot keep up reads as a bad result rather than as an error, so
+under-provisioning it quietly corrupts every measurement it serves.
 
-- SSH access to the Proxmox node as a user that can run `pct` and `pvesh`
-  (in practice root), with key authentication.
-- `.env` filled in from `.env.example` — the DNS token, the ACME contact and
-  zone, and the TURN credentials.
-- `provisioning/proxmox/provision.toml` pointed at your node.
+If the host is a container guest, it needs to be able to run Docker inside
+itself (on Proxmox LXC, that means `nesting=1`).
 
-The provisioner reads those values from its **environment**, not from the file
-directly, so `.env` has to be exported into the shell first. `plan` is
-read-only and needs none of them, which makes it easy to believe everything is
-configured until `apply` stops on the first missing key:
+Give it a **fixed address**, by DHCP reservation or static configuration. The
+TURN relay binds a specific address and advertises it in ICE candidates, so a
+host whose address moves breaks the packet-loss stage until the relay is
+reconfigured.
 
-```bash
-set -a && . <(tr -d '' < .env) && set +a
+## The application
+
+```sh
+git clone https://github.com/sremich/lan-speedtest.git /opt/speedtest
+cd /opt/speedtest
+cp .env.example .env
+docker compose up -d
 ```
 
-The `tr` is not decorative — an `.env` saved on Windows has CRLF line endings,
-and the trailing carriage return ends up inside the value.
+The compose file pulls a published image — `ghcr.io/sremich/lan-speedtest`,
+pinned to an exact tag — and mounts three things from the host:
 
-## Why SSH and not the REST API
+| Mounted | Why |
+|---|---|
+| `./config/speedtest.toml` | So a measurement profile can be retuned and the service restarted without pulling a new image |
+| `./data` | Stored run history, surviving image updates |
+| `/etc/speedtest/tls` | The certificate and key, read-only |
 
-The node is driven with `pct` and `pvesh` over SSH. Beyond avoiding an API
-token, this buys something the REST API cannot: **`pct exec` reaches the guest
-through the hypervisor rather than the network.** Configuration therefore works
-before the guest has a DHCP lease, which removes the chicken-and-egg between
-"the guest needs an address to be configured" and "the address comes from a
-reservation you cannot make until the MAC exists".
+It uses **host networking**. The measurement path should not cross a NAT hop,
+and coturn runs natively on the same host.
 
-The trade-off is honest: root on the hypervisor is broader access than a
-scoped token would be.
+Check it came up:
 
-## The order that matters
-
-```bash
-speedtest-provision mac
+```sh
+curl -s http://127.0.0.1:8080/api/status
 ```
 
-Prints the MAC and changes nothing. **Create the DHCP reservation for it
-first.** A freshly created container otherwise gets a random MAC, so a rebuild
-lands on a different address and the reservation stops working — which defeats
-the point of reproducible provisioning. The MAC is derived from the VMID, so it
-is stable and reproducible without a lookup table.
-
-```bash
-speedtest-provision plan      # read-only: what exists, what would change
-speedtest-provision apply     # create and configure; safe to re-run
-speedtest-provision verify    # health, and that renewal is really scheduled
-```
-
-`--skip-tls` runs everything except coturn and the certificate, which is useful
-before the DNS token is to hand.
-
-## The ownership guard
-
-Provisioning tags every guest it creates and **refuses to modify any guest that
-does not carry that tag**. If the configured VMID is already taken by something
-else, the run stops before any mutating command, names the guest it found, and
-changes nothing.
-
-This is checked in every mode, including `plan`, and is the most heavily tested
-behaviour in the crate. Matching is on an exact tag: a guest tagged
-`not-speedtest-provisioned` is not ours.
-
-## Sizing
-
-Give the guest real resources — 4 cores and 4 GB is a sensible floor. The
-predecessor ran on 1 core and 512 MB, which is nowhere near enough for a backend
-whose entire job is to not be the bottleneck.
+`version` must be the release you intended and `gitSha` identifies the exact
+commit; both are baked in at image build time.
 
 ## TLS
 
@@ -89,32 +59,89 @@ The service **terminates TLS itself**. There is no reverse proxy, for two
 reasons: a proxy hop would sit inside the very path being measured, and it is
 one more thing to keep configured and renewed.
 
-- Both `tls_cert_file` and `tls_key_file` must be set. Exactly one is a startup
-  error, not a silent fallback to plain HTTP.
+```sh
+# in .env
+SPEEDTEST_TLS_BIND=0.0.0.0:443
+SPEEDTEST_TLS_CERT_FILE=/etc/speedtest/tls/fullchain.pem
+SPEEDTEST_TLS_KEY_FILE=/etc/speedtest/tls/privkey.pem
+```
+
+- Both must be set. **Exactly one is a startup error**, not a silent fallback
+  to plain HTTP.
 - Plain HTTP keeps listening on 8080 for the container health check.
-- The binary carries `cap_net_bind_service`, and compose grants the matching
-  capability, so it can bind 443 without running as root.
+- The binary carries `cap_net_bind_service` and compose grants the matching
+  capability, so it binds 443 without running as root.
+- The certificate is mounted group-readable by gid 10001, granted to the
+  container as a supplementary group.
 
-### Renewal
+### Obtaining and renewing the certificate is yours to arrange
 
-Renewal is scheduled weekly, and the ACME hook restarts the service so new
-material is actually served. Provisioning **verifies both** rather than trusting
-the installer's output, because the predecessor host is in exactly the failure
-state that produces: acme.sh installed, certificate valid, and no cron entry or
-timer anywhere. Nothing would ever have renewed it.
+This project does not issue certificates and does not renew them. It reads two
+files. Getting valid material into those files — and keeping it valid — is the
+operator's job, whether that is an internal CA, a wildcard from a public CA
+over ACME DNS-01, or a certificate copied in by hand.
 
-To check by hand:
+Two things are worth building in from the start, because both have a way of
+being discovered late:
 
-```bash
-crontab -l -u root | grep acme
+**Restart the service after renewal.** The certificate is read once, at
+startup. A renewal that replaces the files without restarting the container
+leaves the old material being served until something else happens to restart
+it. If you use acme.sh or certbot, put the restart in the renewal hook.
+
+**Verify the schedule exists, rather than trusting the installer that claimed
+to create it.** An ACME client that is installed, holds a valid certificate,
+and has no cron entry or timer anywhere will renew nothing — and it looks
+completely healthy right up to the day it expires. This is not hypothetical;
+it is the exact state a predecessor host in this project turned out to be in,
+after its install script reported success.
+
+```sh
+crontab -l -u root | grep -i acme
+systemctl list-timers --all | grep -i acme
 openssl x509 -in /etc/speedtest/tls/fullchain.pem -noout -subject -enddate
 ```
+
+Check the end state, not the output of the thing that was supposed to produce
+it.
+
+## The TURN relay
+
+The packet-loss stage needs a relay. Without one the stage is stripped from the
+profile served to the browser, and because every quality rating takes packet
+loss as an input, the ratings shift rather than disappear.
+
+coturn runs **natively on the host, not in a container**: the relay needs a
+contiguous UDP port range, and publishing dozens of UDP ports through Docker's
+userland proxy inserts a hop into the exact path being measured.
+
+```sh
+set -a && . ./.env && set +a
+sudo -E provisioning/coturn/install-coturn.sh
+```
+
+The script renders `/etc/turnserver.conf` from its template, refuses to proceed
+if any placeholder is left unsubstituted, restarts the service only when
+something actually changed, and verifies that the configured address is really
+listening on UDP 3478. It is idempotent — re-running it is a no-op.
+
+It requires all four of `LISTEN_IP`, `TURN_USER`, `TURN_PASS` and `TURN_REALM`
+in the environment, and exits with a named error if any is missing. The first
+three come from the "Relay setup only" block at the bottom of `.env.example`;
+`TURN_REALM` has no default and must be set — the host's FQDN is the usual
+choice.
+
+`TURN_USER` and `TURN_PASS` must match the `SPEEDTEST_TURN_*` values the
+application serves to the browser, or authentication fails and the stage times
+out. See [TURN and Packet Loss](TURN-and-Packet-Loss.md), which also covers
+verifying a relay candidate before blaming anything else.
 
 ## Firewall
 
 | Port | Protocol | Purpose |
 |---|---|---|
 | 443 | TCP | The application |
+| 8080 | TCP | Plain HTTP, if you are serving without TLS |
 | 3478 | UDP | TURN control |
 | 49160-49200 | UDP | TURN relay range |
 
@@ -123,11 +150,18 @@ by the installer, so the rule and the config cannot drift.
 
 ## Updating a release
 
-```bash
+```sh
 docker compose pull && docker compose up -d
 curl -s http://127.0.0.1:8080/api/status
 ```
 
-`version` must match the release you intended and `gitSha` identifies the exact
-commit; both are baked in at image build time. After every release goes green,
-bump the image pin in `docker-compose.yml` and commit it.
+The image tag in `docker-compose.yml` is pinned to an exact version rather than
+`latest`, so an update is a deliberate edit to that line followed by a pull —
+never something that happens because a container restarted.
+
+---
+
+See also: [Quick Start](Quick-Start.md) ·
+[Configuration](Configuration.md) ·
+[TURN and Packet Loss](TURN-and-Packet-Loss.md) ·
+[Troubleshooting](Troubleshooting.md)

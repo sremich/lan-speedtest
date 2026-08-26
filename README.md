@@ -4,11 +4,13 @@ A LAN speed test in the spirit of speed.cloudflare.com — download, upload, idl
 and loaded latency, jitter, packet loss and quality ratings — that runs
 entirely inside your own network and never contacts Cloudflare's edge.
 
+![A completed run](docs/wiki/images/overview.png)
+
 Cloudflare open-sourced their measurement engine as
 [`@cloudflare/speedtest`](https://github.com/cloudflare/speedtest), but not the
 site that drives it. This project is the rest: a Rust backend that satisfies the
 engine's endpoint contract, a front end that drives it, a coturn relay for the
-packet-loss stage, and the provisioning to stand it up.
+packet-loss stage, and the container that serves it all.
 
 Built for a home lab, where the useful question is not "how fast is the pipe"
 but "is this connection healthy" — which is exactly what latency under load,
@@ -28,7 +30,7 @@ jitter and packet loss answer and a plain throughput test does not.
 | Distribution | Every sample, per transfer size and latency phase: min, max, mean, median, 25th/75th percentile and outliers |
 | Raw throughput | Parallel-stream figure, on demand, reported separately from the engine's single-stream result |
 | History | Every run stored, with a trend chart, per-client filtering, and a permalink that redraws the run rather than summarising it |
-| Descriptions | A free-text note per run — where you were, on what, what you were testing — written from the history table or the run's own page |
+| Descriptions | A free-text note per run — where you were, on what, what you were testing |
 | Compare | Two runs side by side, with the difference computed and signed by improvement rather than by arithmetic |
 | Metrics | Optional Prometheus endpoint: the latest run per client, in base units |
 
@@ -45,38 +47,43 @@ rather than trusted:
 - An end-to-end test drives a full run in a real browser and fails if a single
   request leaves the origin.
 
-The only external interaction anywhere in the project is the ACME DNS-01
-challenge at certificate-renewal time — on the guest, on a timer, never during
-a test.
+Nothing in the running system contacts anything outside your network — not at
+startup, not during a test, not when a run is stored.
 
 ## Quick start
 
 ```sh
+git clone https://github.com/sremich/lan-speedtest.git
+cd lan-speedtest
 cp .env.example .env          # fill in; never commit it
 docker compose up -d
 ```
 
 Then open the host in a browser. The test starts on load.
 
-To run from source, see [docs/wiki/Development.md](docs/wiki/Development.md).
+Comment out the `SPEEDTEST_TLS_*` lines for a first run — they point at a
+certificate you do not have yet, and the service refuses to start rather than
+silently falling back to plain HTTP.
+
+Full walkthrough: [Quick Start](docs/wiki/Quick-Start.md). Running from source:
+[Development](docs/wiki/Development.md).
 
 ## Configuration
 
-One TOML file with named measurement profiles — `lan-1g`, `lan-10g`, `quick` —
-selectable with `SPEEDTEST_PROFILE` and applied on restart, no rebuild. That
-setting is the *default*: a picker in the page lets a client choose another, or
-`Auto`, which sizes the test to the link it measures. The
-same goes for what the page calls itself: `SPEEDTEST_SITE_NAME` (or
+One TOML file with named measurement profiles — `lan-1g`, `lan-2.5g`,
+`lan-10g`, `quick` — selectable with `SPEEDTEST_PROFILE` and applied on
+restart, no rebuild. That setting is the *default*: a picker in the page lets a
+client choose another, or `Auto`, which sizes the test to the link it measures.
+The same goes for what the page calls itself: `SPEEDTEST_SITE_NAME` (or
 `server.site_name`) sets the heading and the tab title, so two of these on one
 LAN are tellable apart without rebuilding either.
 
 Profiles matter more than they look. The engine's defaults are tuned for
-internet paths and are actively wrong on a LAN: leave
-`loadedRequestMinDuration` at its 250 ms default and no LAN transfer is slow
-enough to count as loading the connection, so loaded latency is never measured
-— which silently removes **every** quality rating, with no error shown.
-[docs/wiki/Configuration.md](docs/wiki/Configuration.md) covers the sizing
-rules.
+internet paths and are actively wrong on a LAN: leave `loadedRequestMinDuration`
+at its 250 ms default and no LAN transfer is slow enough to count as loading the
+connection, so loaded latency is never measured — which silently removes
+**every** quality rating, with no error shown.
+[Configuration](docs/wiki/Configuration.md) covers the sizing rules.
 
 ## Who ran the test
 
@@ -102,11 +109,18 @@ two engine behaviours that shape the whole design.
 
 ## Status
 
-Shipping. Backend, front end, packet-loss relay, guest provisioning with TLS
-automation, and results history are all in place, deployed, and covered by
-tests at two tiers on every push. The 10 GbE saturation check was waived; "no
-external traffic" is proven by an end-to-end test on every push rather than by
-a manual packet capture.
+Shipping and in use. Backend, front end, packet-loss relay, TLS, and results
+history are all in place and covered by tests at two tiers on every push.
+
+Releases below 1.0.0 were GitHub pre-releases; from 1.0.0 they are full
+releases. A 10 GbE saturation check against real hardware was planned and
+waived, so the backend is untested at that rate; the loopback throughput floor
+in CI stands in for it. "No external traffic" is proven by the end-to-end suite
+on every push rather than by a manual packet capture.
+
+Standing up the host is out of scope. The project ships the application and the
+coturn relay configuration; any Debian-family machine with Docker will serve
+it. See [Deployment](docs/wiki/Deployment.md).
 
 Two limitations worth knowing up front, both inherited from the engine:
 
@@ -124,4 +138,12 @@ Two limitations worth knowing up front, both inherited from the engine:
 
 ## Licence
 
-Not currently licensed for redistribution. `@cloudflare/speedtest` is MIT.
+MIT — see [LICENSE](LICENSE).
+
+Third-party notices are in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md),
+which is also served by the running application at `/THIRD-PARTY-NOTICES.md`.
+`@cloudflare/speedtest` is MIT, and its notice ships with every build.
+
+Not affiliated with, sponsored by, or endorsed by Cloudflare, Inc. Cloudflare
+is a trademark of Cloudflare, Inc. This project is built on their open-source
+`@cloudflare/speedtest` engine, used under the MIT licence.

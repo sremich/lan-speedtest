@@ -126,7 +126,7 @@ async fn download_path_sustains_the_throughput_floor_over_loopback() {
     }
 
     // Recorded in the CI log so the number this floor was chosen against stays
-    // visible, per the testing rules in CLAUDE.md.
+    // visible: a floor is only meaningful next to what was actually measured.
     println!(
         "loopback download: best {best_gbps:.2} Gbps of {passes} passes \
          ({streams} streams x {per_stream} bytes), floor {floor_gbps:.2} Gbps"

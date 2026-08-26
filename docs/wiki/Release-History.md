@@ -5,6 +5,13 @@ pre-releases; from 1.0.0 they are full releases. The 10 GbE saturation check
 was waived, and "no external traffic" is proven by an end-to-end test on every
 push rather than by a manual packet capture.
 
+> **Entries below are a record of what shipped at the time.** Some of them
+> describe the Proxmox provisioning tool that was part of this project through
+> 0.4.0–1.5.1 and has since been removed as out of scope: the project now ships
+> the application and the coturn relay configuration, and how the host comes to
+> exist is a separate concern. Those entries are left as they were written
+> rather than rewritten to match the present.
+
 ## 1.5.1
 
 - **`/metrics` answered with the app shell instead of 404 when disabled.** The
@@ -253,3 +260,9 @@ front end, and the packet-loss relay.
   harness is planned for 0.6.0 and will be reported as a distinct number.
 - Guest provisioning and TLS automation are not yet implemented (0.4.0).
 - Results are not persisted (0.5.0).
+
+---
+
+See also: [Home](Home.md) ·
+[Deployment](Deployment.md) ·
+[Testing](Testing.md)

@@ -81,6 +81,12 @@ RUN setcap 'cap_net_bind_service=+ep' /usr/local/bin/lan-speedtest
 COPY --from=frontend /build/frontend/dist /app/static
 COPY config/speedtest.toml /app/config/speedtest.toml
 
+# The image redistributes MIT-licensed code (the engine, the whole Rust tree)
+# and GPL Debian binaries, all of which require their notices to ship with it.
+# Into the static dir so they are also reachable over HTTP — the bundle's own
+# banner points at /THIRD-PARTY-NOTICES.md and that link has to resolve.
+COPY LICENSE THIRD-PARTY-NOTICES.md /app/static/
+
 # History is written here. Created up front and owned by the runtime user, so a
 # bind-mounted volume inherits somewhere writable rather than failing at start.
 RUN install -d -o speedtest -g speedtest /app/data

@@ -1,6 +1,6 @@
 name: Release
 
-# CI owns releases end to end. A human (or agent) only pushes a vX.Y.Z tag;
+# CI owns releases end to end. Pushing a vX.Y.Z tag is the only manual step;
 # this workflow verifies, tests, builds, pushes the image, and creates the
 # GitHub release. If any step fails, no partial release exists. Never create
 # releases, push images, or edit tags by hand.
@@ -110,4 +110,4 @@ jobs:
             --title "${GITHUB_REF_NAME}" \
             --generate-notes \
             $PRERELEASE
-          echo "Release created. REMINDER: bump the docker-compose image pin and run the CLAUDE.md release checklist."
+          echo "Release created. REMINDER: bump the docker-compose image pin."

@@ -6,24 +6,26 @@
 - Node 22+
 - Docker (for the container build and the coturn relay used in tests)
 
-Development happens on Windows; builds and containers happen in WSL Debian.
-
 ## Setup
 
 ```sh
-git clone <repo-url>
-cd <repo>
-
-# Build out-of-tree. The working copy is OneDrive-synced and a Cargo target
-# directory will otherwise generate an enormous amount of sync churn.
-export CARGO_TARGET_DIR=$HOME/.cargo-target/speedtest
+git clone https://github.com/sremich/lan-speedtest.git
+cd lan-speedtest
 
 npm --prefix frontend ci
 cargo build --release --manifest-path backend/Cargo.toml
 ```
 
-Never trust a synced `node_modules` or target directory from another machine —
-recreate them.
+If your working copy sits inside a synced folder (OneDrive, Dropbox), build
+out of tree — a Cargo target directory generates an enormous amount of sync
+churn:
+
+```sh
+export CARGO_TARGET_DIR=$HOME/.cargo-target/speedtest
+```
+
+Never trust a synced `node_modules` or target directory from another machine.
+Recreate them.
 
 ## Run it
 
@@ -33,7 +35,7 @@ npm --prefix frontend run build            # -> frontend/dist
 SPEEDTEST_CONFIG=config/speedtest.toml \
 SPEEDTEST_STATIC_DIR=frontend/dist \
 SPEEDTEST_PROFILE=quick \
-  $CARGO_TARGET_DIR/release/lan-speedtest
+  ./backend/target/release/lan-speedtest
 ```
 
 Then open `http://127.0.0.1:8080/`. The test starts on load.
@@ -49,11 +51,14 @@ npm --prefix frontend run dev
 ## Checks
 
 ```sh
-cargo fmt   --manifest-path backend/Cargo.toml
+cargo fmt    --manifest-path backend/Cargo.toml
 cargo clippy --manifest-path backend/Cargo.toml --all-targets -- -D warnings
-cargo test  --manifest-path backend/Cargo.toml --release -- --nocapture
+cargo test   --manifest-path backend/Cargo.toml --release -- --nocapture
 npm --prefix frontend run typecheck
+npm --prefix frontend run test:unit
 ```
+
+See [Testing](Testing.md) for the tiers above these.
 
 ## Container
 
@@ -68,6 +73,48 @@ docker run --rm -p 8080:8080 speedtest:dev
 Run the real container whenever the Dockerfile or entrypoint changes — the
 image being buildable is not the same as the image working.
 
+## Regenerating the documentation screenshots
+
+The screenshots in this wiki are produced by `frontend/scripts/screenshots.mjs`
+against a real backend. Nothing in them is mocked or drawn: they are a genuine
+run of whatever link the script is pointed at, which is the point — a
+screenshot of fabricated numbers teaches the reader to expect a page that does
+not exist.
+
+Start a backend with history enabled, a relay configured, and trusted proxies
+set, then run the script:
+
+```sh
+docker compose -f docker-compose.e2e.yml up -d      # the test relay
+
+SPEEDTEST_CONFIG=config/speedtest.toml \
+SPEEDTEST_STATIC_DIR=frontend/dist \
+SPEEDTEST_PROFILE=lan-1g \
+SPEEDTEST_HISTORY_DB=/tmp/shots.db \
+SPEEDTEST_METRICS=1 \
+SPEEDTEST_TRUSTED_PROXIES=127.0.0.1/32 \
+SPEEDTEST_TURN_ENABLED=true SPEEDTEST_TURN_URI=127.0.0.1:3478 \
+SPEEDTEST_TURN_USER=e2e SPEEDTEST_TURN_PASS=e2e-not-a-secret \
+  ./backend/target/release/lan-speedtest &
+
+node frontend/scripts/screenshots.mjs
+```
+
+Three notes on that invocation:
+
+- **The relay has to be reachable from the browser that Playwright drives**, on
+  the same address the engine is handed. Both peer connections relay through
+  it, so if the browser cannot reach `127.0.0.1:3478` the run ends in an ICE
+  timeout and every screenshot carries an error banner.
+- **`SPEEDTEST_TRUSTED_PROXIES` is what produces more than one client** in the
+  history screenshots. The script sends `X-Forwarded-For` from a couple of
+  extra addresses, through the same path a real reverse proxy would use.
+- `SHOT_BASE` and `SHOT_OUT` override the backend URL and the output directory.
+
+Start from an empty history database. The script adds runs but does not remove
+them, so re-running it against a database that already has runs in it produces
+a history screenshot with more rows than it should have.
+
 ## Versioning
 
 The version lives **only** in the `VERSION` file at the repo root.
@@ -77,9 +124,21 @@ passes) and exposes it as a compile-time constant. `Cargo.toml` and
 release; do not hand-edit them. CI refuses any tag that disagrees with
 `VERSION`.
 
-## A note on this dev machine
+The git SHA comes from `APP_GIT_SHA` at build time and shows as `unknown` in a
+local build that does not set it.
 
-Its WSL2 loopback is slow — measured at 0.70 Gbps with a bare Python socket and
-0.64 Gbps with `nc`. Any local throughput figure is bounded by that, not by the
-code. Local numbers are useful only for spotting order-of-magnitude
-regressions; real throughput is a tier-4 question answered on hardware.
+## A note on local throughput figures
+
+Loopback is not a link. On one development machine WSL2's loopback measured
+0.70 Gbps with a bare Python socket and 0.64 Gbps with `nc` — any local
+throughput number is bounded by that, not by the code.
+
+Local figures are useful for spotting order-of-magnitude regressions and
+nothing else. Real throughput is a question for real hardware.
+
+---
+
+See also: [Testing](Testing.md) ·
+[Architecture](Architecture.md) ·
+[Engine Contract](Engine-Contract.md) ·
+[Configuration](Configuration.md)

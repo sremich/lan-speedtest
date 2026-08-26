@@ -64,7 +64,10 @@ server is the other tell — plain was unaffected.
 for an acknowledgement to be delayed. Reproducing it needs a real link.
 
 **Fix.** Upgrade to 1.3.1 or later. Latency figures stored before it are
-inflated by up to 40 ms and cannot be corrected retrospectively.
+inflated by up to 40 ms and cannot be corrected retrospectively — which is why
+a comparison involving one of those runs greys its latency rows rather than
+reporting the fix as a network improvement. See
+[History and Metrics](History-and-Metrics.md#when-latency-cannot-be-compared).
 
 ## Latency looks quantised, or reads 0
 
@@ -189,15 +192,29 @@ intentional. Fix the marker; never weaken the check.
 
 ## Certificate stopped renewing
 
-Verify the renewal is actually scheduled, rather than trusting an install
-script's output:
+This project reads two files and does not renew them — issuing and renewing the
+certificate is the operator's job. Two failure modes account for almost every
+case.
+
+**The renewal never runs.** An ACME client that is installed, holds a valid
+certificate, and has no cron entry and no timer anywhere renews nothing, and
+looks entirely healthy until the day it expires. Verify the schedule exists
+rather than trusting the installer that claimed to create it:
 
 ```sh
-crontab -l -u root
+crontab -l -u root | grep -i acme
 systemctl list-timers --all | grep -i acme
-openssl x509 -in /path/to/fullchain.pem -noout -enddate
+openssl x509 -in /etc/speedtest/tls/fullchain.pem -noout -enddate
 ```
 
-An installed ACME client with no cron entry and no timer renews nothing. This
-has already happened once on the predecessor host, which is why it is worth
-checking explicitly rather than assuming.
+**The renewal runs but nothing picks it up.** The certificate is read once, at
+startup. New material on disk is not served until the service restarts, so the
+renewal hook has to restart the container. If `openssl x509` on the file shows
+a later expiry than the certificate your browser is being handed, this is it.
+
+---
+
+See also: [Deployment](Deployment.md) ·
+[Configuration](Configuration.md) ·
+[TURN and Packet Loss](TURN-and-Packet-Loss.md) ·
+[Reading the Results](Reading-the-Results.md)

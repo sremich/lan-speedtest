@@ -7,6 +7,19 @@ import { defineConfig } from 'vitest/config';
 // the measurement endpoints to a locally running backend to preserve that.
 const BACKEND = process.env.SPEEDTEST_BACKEND ?? 'http://127.0.0.1:8080';
 
+// The engine is MIT and its licence requires the notice to travel with the
+// code. It cannot travel on its own: `@cloudflare/speedtest` keeps its notice
+// in a sibling LICENSE file rather than a banner comment, so there is nothing
+// in the module for esbuild's `legalComments` to preserve — minification
+// leaves the bundle with no attribution at all. Hence an explicit banner,
+// applied to every chunk because `manualChunks` is free to move the engine
+// into any of them. `THIRD-PARTY-NOTICES.md` carries the full text.
+const LICENCE_BANNER = `/*!
+ * Bundles @cloudflare/speedtest — MIT, Copyright (c) 2023 Cloudflare.
+ * https://github.com/cloudflare/speedtest
+ * Full third-party notices: /THIRD-PARTY-NOTICES.md
+ */`;
+
 export default defineConfig({
   build: {
     outDir: 'dist',
@@ -23,7 +36,7 @@ export default defineConfig({
         result: resolve(__dirname, 'result.html'),
         compare: resolve(__dirname, 'compare.html'),
       },
-      output: { manualChunks: undefined },
+      output: { manualChunks: undefined, banner: LICENCE_BANNER },
     },
   },
   test: {

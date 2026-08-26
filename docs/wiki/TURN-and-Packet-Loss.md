@@ -1,5 +1,9 @@
 # TURN and packet loss
 
+The packet-loss stage needs a relay of your own. This page covers what the
+engine actually does with it, how to stand one up, and how to prove it works
+before blaming anything else.
+
 ## How the measurement works
 
 The engine does not ping anything to measure loss. It opens **two**
@@ -44,18 +48,32 @@ and no relay candidate.
 
 ## Setting up coturn
 
-Production runs coturn natively on the guest, not in a container: the relay
-needs a contiguous UDP port range, and publishing dozens of UDP ports through
-Docker's userland proxy inserts a hop into the exact path being measured.
+Run coturn natively on the host, not in a container: the relay needs a
+contiguous UDP port range, and publishing dozens of UDP ports through Docker's
+userland proxy inserts a hop into the exact path being measured.
 
 ```sh
-sudo TURN_USER=... TURN_PASS=... TURN_REALM=... LISTEN_IP=... \
-  provisioning/coturn/install-coturn.sh
+set -a && . ./.env && set +a
+sudo -E provisioning/coturn/install-coturn.sh
 ```
 
+Four variables must be in the environment, and the script exits with a named
+error if any is missing:
+
+| Variable | What it is |
+|---|---|
+| `LISTEN_IP` | The host's LAN address, which coturn binds and relays on. Not a wildcard — the relay should answer on the measured path and nowhere else |
+| `TURN_USER` | Must match `SPEEDTEST_TURN_USER` |
+| `TURN_PASS` | Must match `SPEEDTEST_TURN_PASS` |
+| `TURN_REALM` | The realm, usually the host's FQDN. There is no default |
+
+The first three sit in the "Relay setup only" block at the bottom of
+`.env.example`; `TURN_REALM` is commented out there and has to be uncommented.
+
 The script renders the config template, refuses to proceed if any placeholder
-is left unsubstituted, restarts the service only when something actually
-changed, and verifies that UDP 3478 is listening.
+is left unsubstituted, installs the result readable by the user coturn drops
+to, restarts the service only when something actually changed, and verifies
+that the configured address is listening on UDP 3478. Re-running it is a no-op.
 
 The relay range is `49160-49200`, defined once in the template and read back
 out of it by the installer so the firewall rule and the config cannot drift.
@@ -74,6 +92,11 @@ meaningless.
 The e2e suite automates exactly this check, then runs a full measurement
 through the relay.
 
+`turnutils_uclient` is the obvious tool to reach for, and is a trap here: it
+will happily report 0% loss against a relay whose configuration is being
+ignored, because a default coturn permits anonymous allocations. It proves the
+daemon is alive, not that your credentials or realm work.
+
 ## Loopback peers
 
 coturn **denies loopback peer addresses by default**. When both relay
@@ -86,3 +109,10 @@ The e2e compose file passes `--allow-loopback-peers` for that reason, and only
 for that reason. The production template keeps loopback denied, along with
 link-local and multicast ranges: a relay on a LAN address has no business
 forwarding to any of them.
+
+---
+
+See also: [Deployment](Deployment.md) ·
+[Configuration](Configuration.md) ·
+[Troubleshooting](Troubleshooting.md) ·
+[Reading the Results](Reading-the-Results.md)

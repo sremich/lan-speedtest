@@ -3,12 +3,12 @@
 
 services:
   app:
-    image: ghcr.io/sremich/self-hosted-cloudflare-speedtest:v1.5.1
+    image: ghcr.io/sremich/lan-speedtest:v1.5.1
     container_name: speedtest
     restart: unless-stopped
     env_file: .env
     # Host networking: the measurement path should not cross a NAT hop, and
-    # coturn runs natively on the same guest. See DECISIONS.md.
+    # coturn runs natively on the same guest.
     network_mode: host
     # Needed to bind 443 as a non-root user; the binary carries the matching
     # file capability. See the Dockerfile.
