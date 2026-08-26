@@ -5,7 +5,7 @@
 #
 # Measurement entries mirror `MeasurementConfig` from @cloudflare/speedtest
 # 1.13.1 exactly, camelCase included, so they can be read straight against the
-# engine's own documentation. See docs/wiki/Engine-Contract.md.
+# engine's own documentation. See https://github.com/sremich/lan-speedtest/wiki/Engine-Contract.
 #
 # Sizing note: the engine stops issuing further rounds of a direction once a
 # single request takes longer than `bandwidthFinishRequestDuration` (1000 ms).
@@ -93,7 +93,7 @@ measure_download_loaded_latency = true
 measure_upload_loaded_latency = true
 # Engine defaults (250 / 400) discard every LAN-speed transfer and leave the
 # AIM ratings empty. 25 MB at 1 Gbps is ~200 ms, so the threshold must sit
-# below that. See docs/wiki/Engine-Contract.md.
+# below that. See https://github.com/sremich/lan-speedtest/wiki/Engine-Contract.
 loaded_request_min_duration = 50.0
 loaded_latency_throttle = 50.0
 measurements = [
@@ -133,7 +133,7 @@ measure_download_loaded_latency = true
 measure_upload_loaded_latency = true
 # 60 MB at 2.5 Gbps is ~190 ms and the smallest upload (25 MB) is ~80 ms, so the
 # threshold has to sit below the latter or the upload stage stops counting as
-# load and the quality ratings go empty. See docs/wiki/Engine-Contract.md.
+# load and the quality ratings go empty. See https://github.com/sremich/lan-speedtest/wiki/Engine-Contract.
 loaded_request_min_duration = 40.0
 loaded_latency_throttle = 40.0
 measurements = [

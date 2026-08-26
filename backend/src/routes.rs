@@ -2,7 +2,7 @@
 //!
 //! `/__down` and `/__up` implement the request contract of
 //! `@cloudflare/speedtest` (verified against the 1.13.1 sources — see
-//! `docs/wiki/Engine-Contract.md`). Two details in there are easy to get
+//! `https://github.com/sremich/lan-speedtest/wiki/Engine-Contract`). Two details in there are easy to get
 //! wrong and both are load-bearing:
 //!
 //! 1. The engine's `server-timing` parser only accepts the metric names

@@ -6,6 +6,30 @@ three-part X.Y.Z (bugfix +0.0.1, minor +0.1.0, major +1.0.0). On release,
 move the Unreleased entries into a new version section, bump `VERSION`,
 commit, then tag.
 
+## [Unreleased]
+
+### Changed
+
+- **The wiki is now the only home for the documentation.** `docs/wiki/` and
+  `scripts/publish-wiki.sh` are gone; pages are edited on the wiki itself
+  rather than in this repository and copied across. Every reference that
+  pointed into `docs/wiki/` - the README, and the comments in `config.rs`,
+  `routes.rs`, `speedtest.toml`, `api.ts` and `screenshots.mjs` - now points at
+  the wiki by URL, and the README screenshot is served from the wiki's own
+  asset host. Nothing that used to resolve stopped resolving.
+
+  The trade-off is real and worth stating: documentation can no longer be
+  reviewed in a pull request or changed in the same commit as the code it
+  describes. The engine contract in particular is meant to move together with
+  the tests that enforce it, and that now takes deliberate care rather than
+  falling out of the process.
+
+- **`screenshots.mjs` requires `SHOT_OUT`.** Its default wrote into
+  `docs/wiki/images`, which no longer exists. The images live in the wiki
+  repository now, so regenerating them means pointing the script at a clone of
+  it; the header says how. There is deliberately no default, because any
+  in-repo one would reintroduce what this change removed.
+
 ## [1.6.0] - 2026-08-26
 
 Preparing the repository to be public.
@@ -289,7 +313,7 @@ Whose run it was, and how to get back to it.
 - **The address is classified and labelled.** loopback, LAN,
   `Tailscale or carrier NAT`, link-local, or public — with a note on hover
   explaining what that means for the number shown. See
-  [Client Identity](docs/wiki/Client-Identity.md), which also records the
+  [Client Identity](https://github.com/sremich/lan-speedtest/wiki/Client-Identity), which also records the
   honest negative results: an address translated by a Tailscale subnet router
   cannot be recovered at all, and a browser will not disclose its own private
   address to a page.

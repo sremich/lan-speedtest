@@ -11,11 +11,18 @@
  * fabricated numbers would teach the reader to expect a page that does not
  * exist.
  *
- * Usage — see docs/wiki/Development.md for the backend invocation:
+ * The images live in the wiki repository, not this one, so refreshing them is
+ * a three-step round trip. See the Development page for the backend invocation:
+ * https://github.com/sremich/lan-speedtest/wiki/Development
  *
- *   node scripts/screenshots.mjs
- *   SHOT_BASE=http://127.0.0.1:8080 SHOT_OUT=../../docs/wiki/images \
- *     node scripts/screenshots.mjs
+ *   git clone https://github.com/sremich/lan-speedtest.wiki.git /tmp/wiki
+ *   SHOT_OUT=/tmp/wiki/images node scripts/screenshots.mjs
+ *   git -C /tmp/wiki add -A && git -C /tmp/wiki commit -m "Refresh screenshots"
+ *   git -C /tmp/wiki push
+ *
+ * SHOT_OUT is required. There is deliberately no default: the previous one
+ * pointed into this repository, and writing there now would reintroduce the
+ * duplication that removing docs/wiki was meant to end.
  *
  * The backend must have history enabled and should have TURN configured;
  * without a relay the packet-loss figure is a dash in every shot.
@@ -29,9 +36,15 @@ import { fileURLToPath } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 const BASE = process.env.SHOT_BASE ?? 'http://127.0.0.1:8080';
-// `||` not `??`: SHOT_OUT="" should fall back, not resolve OUT to HERE and
-// scatter the images into this directory.
-const OUT = path.resolve(HERE, process.env.SHOT_OUT || '../../docs/wiki/images');
+// Required rather than defaulted. Checked explicitly because an unset or empty
+// value would otherwise resolve to HERE and scatter fifteen PNGs into this
+// directory; the old default pointed into docs/wiki, which no longer exists.
+if (!process.env.SHOT_OUT) {
+  console.error('SHOT_OUT is required: the directory to write the images into,');
+  console.error('normally the images/ directory of a clone of the wiki repo.');
+  process.exit(1);
+}
+const OUT = path.resolve(HERE, process.env.SHOT_OUT);
 
 /**
  * Extra clients for the history, obtained honestly.
@@ -44,7 +57,7 @@ const OUT = path.resolve(HERE, process.env.SHOT_OUT || '../../docs/wiki/images')
  *
  * The measurements are still real. Only the address a run is *filed under* is
  * arranged, through a feature that behaves exactly this way in production.
- * See docs/wiki/Client-Identity.md.
+ * See https://github.com/sremich/lan-speedtest/wiki/Client-Identity.
  */
 const EXTRA_CLIENTS = [
   { ip: '192.168.1.24', runs: 2 },

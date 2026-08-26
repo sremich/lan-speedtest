@@ -4,7 +4,7 @@ A LAN speed test in the spirit of speed.cloudflare.com — download, upload, idl
 and loaded latency, jitter, packet loss and quality ratings — that runs
 entirely inside your own network and never contacts Cloudflare's edge.
 
-![A completed run](docs/wiki/images/overview.png)
+![A completed run](https://raw.githubusercontent.com/wiki/sremich/lan-speedtest/images/overview.png)
 
 Cloudflare open-sourced their measurement engine as
 [`@cloudflare/speedtest`](https://github.com/cloudflare/speedtest), but not the
@@ -65,8 +65,8 @@ Comment out the `SPEEDTEST_TLS_*` lines for a first run — they point at a
 certificate you do not have yet, and the service refuses to start rather than
 silently falling back to plain HTTP.
 
-Full walkthrough: [Quick Start](docs/wiki/Quick-Start.md). Running from source:
-[Development](docs/wiki/Development.md).
+Full walkthrough: [Quick Start](https://github.com/sremich/lan-speedtest/wiki/Quick-Start). Running from source:
+[Development](https://github.com/sremich/lan-speedtest/wiki/Development).
 
 ## Configuration
 
@@ -83,7 +83,7 @@ internet paths and are actively wrong on a LAN: leave `loadedRequestMinDuration`
 at its 250 ms default and no LAN transfer is slow enough to count as loading the
 connection, so loaded latency is never measured — which silently removes
 **every** quality rating, with no error shown.
-[Configuration](docs/wiki/Configuration.md) covers the sizing rules.
+[Configuration](https://github.com/sremich/lan-speedtest/wiki/Configuration) covers the sizing rules.
 
 ## Who ran the test
 
@@ -95,14 +95,14 @@ the history impossible to correlate with a DHCP lease table or a switch port.
 
 Reverse DNS is off by default and range-restricted even when on, and behind a
 reverse proxy `X-Forwarded-For` is believed only from a peer you have named as
-a proxy. [Client Identity](docs/wiki/Client-Identity.md) has the details,
+a proxy. [Client Identity](https://github.com/sremich/lan-speedtest/wiki/Client-Identity) has the details,
 including the two things that genuinely cannot be recovered: an address
 translated by a Tailscale subnet router, and a browser's own private address.
 
 ## Documentation
 
-The [wiki](docs/wiki/Home.md) is the reference.
-[Engine Contract](docs/wiki/Engine-Contract.md) is the page to read before
+The [wiki](https://github.com/sremich/lan-speedtest/wiki) is the reference.
+[Engine Contract](https://github.com/sremich/lan-speedtest/wiki/Engine-Contract) is the page to read before
 touching the backend: it records the `@cloudflare/speedtest` request and
 response contract as verified from the package's own sources, along with the
 two engine behaviours that shape the whole design.
@@ -120,7 +120,7 @@ on every push rather than by a manual packet capture.
 
 Standing up the host is out of scope. The project ships the application and the
 coturn relay configuration; any Debian-family machine with Docker will serve
-it. See [Deployment](docs/wiki/Deployment.md).
+it. See [Deployment](https://github.com/sremich/lan-speedtest/wiki/Deployment).
 
 Two limitations worth knowing up front, both inherited from the engine:
 

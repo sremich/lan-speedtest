@@ -229,7 +229,7 @@ pub struct Profile {
     /// and catastrophic on a LAN: a 250 MB download at 10 Gbps takes 200 ms,
     /// so *every* size is discarded, loaded latency stays 0, and because 0 is
     /// falsy the engine then emits no AIM scores at all. Tune it below the
-    /// fastest transfer a profile expects. See docs/wiki/Engine-Contract.md.
+    /// fastest transfer a profile expects. See https://github.com/sremich/lan-speedtest/wiki/Engine-Contract.
     #[serde(default = "default_loaded_request_min_duration")]
     pub loaded_request_min_duration: f64,
     /// Minimum interval (ms) between loaded-latency pings. The engine's 400 ms

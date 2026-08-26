@@ -25,7 +25,7 @@ export interface Status {
    * Worth saying out loud, because "why is it always 10.x?" has a different
    * answer depending on which of these it is — and the honest answer to some
    * of them is that the real address cannot be recovered. See
-   * `docs/wiki/Client-Identity.md`.
+   * `https://github.com/sremich/lan-speedtest/wiki/Client-Identity`.
    */
   clientKind: string;
   clientKindLabel: string;
