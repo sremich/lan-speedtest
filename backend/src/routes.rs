@@ -18,9 +18,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::body::Body;
-use axum::extract::{ConnectInfo, FromRequestParts, Path, Query, State};
+use axum::extract::{ConnectInfo, FromRequestParts, Path, Query, Request, State};
 use axum::http::request::Parts;
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
@@ -167,6 +168,17 @@ pub fn router(state: AppState) -> Router {
     // SPA-style fallback so a deep link still resolves to the app shell.
     let statics = ServeDir::new(&static_dir).fallback(ServeFile::new(&index));
 
+    // Everything that changes stored state, grouped so the same-origin guard is
+    // applied once. A fourth mutating endpoint added here inherits it; one
+    // added below does not, which is why these three live apart.
+    let mutating = Router::new()
+        .route("/api/results", post(record_result))
+        .route("/api/results/{id}/note", post(set_note))
+        .route("/api/clients/{ip}/name", post(set_client_name))
+        // `route_layer`, not `layer`: the guard should run for these paths and
+        // not for anything that falls through to the static handler.
+        .route_layer(middleware::from_fn(same_origin));
+
     Router::new()
         .route("/__down", get(down))
         .route("/__up", post(up))
@@ -174,12 +186,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/profile", get(profile))
         .route("/api/profiles", get(profiles))
         .route("/api/health", get(|| async { "ok" }))
-        .route("/api/results", post(record_result))
         .route("/api/results/{id}", get(get_result))
-        .route("/api/results/{id}/note", post(set_note))
         .route("/api/history", get(list_history))
         .route("/api/clients", get(list_clients))
-        .route("/api/clients/{ip}/name", post(set_client_name))
+        .merge(mutating)
         // Always routed, and 404 from the handler when it is turned off.
         //
         // It used to be left unrouted instead, which looked equivalent and was
@@ -190,6 +200,104 @@ pub fn router(state: AppState) -> Router {
         .route("/metrics", get(metrics))
         .fallback_service(statics)
         .with_state(state)
+}
+
+/// Refuses a state-changing request that a browser says came from somewhere
+/// else.
+///
+/// This is a rebinding/CSRF guard, not authentication. The tool is
+/// deliberately unauthenticated on a trusted LAN — anyone who can reach it can
+/// record a run, and that is the intended design. What this stops is a page on
+/// an unrelated origin *silently* driving those endpoints in a visitor's
+/// browser: a script on `evil.example` cannot forge the `Origin` header, so
+/// its cross-site POST is refused rather than filing a run or renaming a
+/// client under the visitor's address.
+///
+/// A request with **no** `Origin` at all is allowed through unchanged. curl,
+/// the test suite and anything that is not a browser never send one, and a
+/// header the attacker's browser attaches automatically is only useful when it
+/// is present. Refusing on absence would break every non-browser caller while
+/// adding nothing: the case being defended against always has the header.
+async fn same_origin(req: Request, next: Next) -> Response {
+    // `Origin` is a single value by definition; a request carrying two of them
+    // is malformed, and `to_str` failing means it was not even ASCII. Both are
+    // treated as a mismatch rather than as absence.
+    if let Some(origin) = req.headers().get(header::ORIGIN) {
+        let origin = origin.to_str().unwrap_or("");
+        // HTTP/2 carries the authority in the pseudo-header rather than in
+        // `Host`, which reaches us on the URI.
+        let host = req
+            .headers()
+            .get(header::HOST)
+            .and_then(|v| v.to_str().ok())
+            .or_else(|| req.uri().authority().map(|a| a.as_str()));
+
+        let matches = host.is_some_and(|host| origin_matches_host(origin, host));
+        if !matches {
+            return (StatusCode::FORBIDDEN, "cross-origin request refused").into_response();
+        }
+    }
+    next.run(req).await
+}
+
+/// Whether an `Origin` header value names the same host and port as the
+/// request's `Host`.
+///
+/// The scheme is deliberately ignored — the same deployment answers on both
+/// http and https, and which one a browser used says nothing about where the
+/// page came from. The *port* is not ignored, because a different port on the
+/// same host is a different origin to the browser and should be one here too.
+/// A port that is the default for the origin's scheme is dropped from both
+/// sides first, so `https://speedtest.example` and `speedtest.example:443` are
+/// recognised as the one origin.
+///
+/// `Origin: null` — a sandboxed iframe, a `file://` page, some
+/// cross-origin redirects — never matches. That is precisely the case where
+/// the browser has declined to say where the request came from, so there is
+/// nothing to compare and the answer is no.
+fn origin_matches_host(origin: &str, host: &str) -> bool {
+    let Some(origin) = origin_authority(origin) else {
+        return false;
+    };
+    let origin = normalized_authority(origin);
+    !origin.is_empty() && origin == normalized_authority(host)
+}
+
+/// The `host[:port]` part of a serialised origin, or `None` if it does not look
+/// like one — which includes the literal `null`.
+fn origin_authority(origin: &str) -> Option<&str> {
+    let (_scheme, rest) = origin.split_once("://")?;
+    // An origin carries no path, but truncating at one costs nothing and keeps
+    // a stray `https://host/` from being compared as a host called `host/`.
+    Some(rest.split(['/', '?', '#']).next().unwrap_or(rest))
+}
+
+/// Lower-cased `host[:port]` with a default port and any IPv6 brackets removed,
+/// so two spellings of one origin compare equal.
+fn normalized_authority(authority: &str) -> String {
+    let (host, port) = split_port(authority);
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    match port {
+        None | Some("80") | Some("443") => host.to_ascii_lowercase(),
+        Some(port) => format!("{}:{}", host.to_ascii_lowercase(), port),
+    }
+}
+
+/// Splits `host:port`, knowing that an IPv6 literal is full of colons that are
+/// not the port separator.
+fn split_port(authority: &str) -> (&str, Option<&str>) {
+    let colon = match authority.rfind(']') {
+        // Bracketed: only a colon after the closing bracket can be a port.
+        Some(bracket) => authority[bracket..].find(':').map(|i| bracket + i),
+        // Unbracketed and more than one colon is a bare IPv6 literal, which has
+        // no port at all — `::1:8080` is an address, not `::1` on port 8080.
+        None if authority.find(':') != authority.rfind(':') => None,
+        None => authority.find(':'),
+    };
+    match colon {
+        Some(i) => (&authority[..i], Some(&authority[i + 1..])),
+        None => (authority, None),
+    }
 }
 
 /// Prometheus exposition of the most recent run per client.
@@ -306,6 +414,12 @@ impl IntoResponse for HistoryError {
             HistoryError::Db(_) => StatusCode::INTERNAL_SERVER_ERROR,
             HistoryError::Json(_) | HistoryError::NothingMeasured => StatusCode::BAD_REQUEST,
             HistoryError::TooLarge { .. } => StatusCode::PAYLOAD_TOO_LARGE,
+            // Snapshot failures come from the background pass, not from a
+            // request. If one ever reaches a handler it is ours, not the
+            // caller's.
+            HistoryError::Snapshot { .. } | HistoryError::SnapshotOverwritesDatabase { .. } => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
         };
         if status.is_server_error() {
             tracing::error!("history: {self}");
@@ -892,6 +1006,79 @@ mod tests {
             .to_str()
             .unwrap();
         assert!(cc.contains("no-store"), "cache-control was {cc}");
+    }
+
+    #[test]
+    fn an_origin_matches_the_host_it_was_served_from() {
+        // The pairs a browser actually produces against this service: the
+        // engine's own fetches, a bookmark on the LAN name, an address literal.
+        for (origin, host) in [
+            ("http://speedtest.example:8080", "speedtest.example:8080"),
+            ("https://speedtest.example", "speedtest.example"),
+            ("http://192.0.2.10:8080", "192.0.2.10:8080"),
+            ("http://[2001:db8::1]:8080", "[2001:db8::1]:8080"),
+            // The scheme is not part of the comparison — the same deployment
+            // answers on both, and the page came from the same place either way.
+            ("http://speedtest.example:8080", "speedtest.example:8080"),
+            // A default port is the same origin whether it is spelled out or
+            // not; the browser omits it, a hand-typed URL may not.
+            ("https://speedtest.example", "speedtest.example:443"),
+            ("http://speedtest.example:80", "speedtest.example"),
+            // Host names are case-insensitive.
+            ("http://SpeedTest.Example:8080", "speedtest.example:8080"),
+        ] {
+            assert!(
+                origin_matches_host(origin, host),
+                "{origin} should be same-origin with {host}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_foreign_origin_never_matches() {
+        for (origin, host) in [
+            // The case this guard exists for: a page somewhere else driving our
+            // endpoints in a visitor's browser.
+            ("http://evil.example", "speedtest.example:8080"),
+            // A different port on the same host is a different origin to the
+            // browser, so it is one here too.
+            ("http://speedtest.example:8081", "speedtest.example:8080"),
+            ("http://speedtest.example", "speedtest.example:8080"),
+            ("http://speedtest.example:8080", "speedtest.example"),
+            // A prefix or suffix of the host is not the host.
+            ("http://speedtest.example.evil.test", "speedtest.example"),
+            ("http://evilspeedtest.example", "speedtest.example"),
+            // A sandboxed iframe or a file:// page. The browser is declining to
+            // say where the request came from, which is not a match.
+            ("null", "speedtest.example"),
+            ("", "speedtest.example"),
+            // Not an origin at all.
+            ("speedtest.example", "speedtest.example"),
+            ("http://", "speedtest.example"),
+        ] {
+            assert!(
+                !origin_matches_host(origin, host),
+                "{origin} must not be treated as same-origin with {host}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_ipv6_literal_is_not_mistaken_for_a_host_and_port() {
+        // The last colon of `2001:db8::1` is not a port separator. Reading it as
+        // one would make two different addresses compare equal.
+        assert_eq!(
+            split_port("[2001:db8::1]:8080"),
+            ("[2001:db8::1]", Some("8080"))
+        );
+        assert_eq!(split_port("[2001:db8::1]"), ("[2001:db8::1]", None));
+        assert_eq!(split_port("2001:db8::1"), ("2001:db8::1", None));
+        assert_eq!(split_port("192.0.2.10:8080"), ("192.0.2.10", Some("8080")));
+        assert_eq!(split_port("192.0.2.10"), ("192.0.2.10", None));
+        assert!(!origin_matches_host(
+            "http://[2001:db8::2]:8080",
+            "[2001:db8::1]:8080"
+        ));
     }
 
     #[test]

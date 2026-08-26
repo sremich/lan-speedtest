@@ -30,6 +30,68 @@ commit, then tag.
   it; the header says how. There is deliberately no default, because any
   in-repo one would reintroduce what this change removed.
 
+## [1.7.0] - 2026-08-26
+
+Housekeeping: the database looks after its own disk, optional point-in-time
+snapshots, new metrics, and a guard against cross-origin mutation.
+
+### Added
+
+- **SQLite incremental auto-vacuum.** Databases now run with
+  `auto_vacuum = INCREMENTAL`, so deleting old runs reclaims disk space rather
+  than leaving it to a free list inside the file. Existing databases are
+  converted at startup via a full `VACUUM` — a once-per-deployment cost of a
+  fraction of a second for a homelab's history. The daily pruning pass now
+  hands freed pages back to the filesystem and truncates the WAL, both
+  invisible in the row count alone. The `Pruned` report now includes
+  `bytes_reclaimed`, measured rather than inferred.
+
+  During development, a single `PRAGMA incremental_vacuum` was assumed to
+  reclaim all freed pages and return. It does not — the pragma emits one row
+  per page freed and stops there, so stepping once reclaims exactly one 4 KiB
+  page. Stepping a 2 MB deletion to completion was the difference between a
+  shrinking file and one that silently grew while the deployment deleted runs
+  daily.
+
+- **Optional history snapshots** via `server.history_backup_dir`
+  (environment: `SPEEDTEST_HISTORY_BACKUP_DIR`). When set, the daily
+  maintenance pass writes a consistent copy of the database here as
+  `history-backup.db`, using `VACUUM INTO` rather than a file copy — a
+  database being served is not a safe thing to copy while open. The copy is
+  written to a temporary file and renamed into place, so a process killed
+  mid-snapshot leaves the previous good copy untouched. Misconfiguration
+  (a backup destination that would write the snapshot over the live database,
+  or naming a backup location without enabling history at all) refuses to
+  start rather than silently doing nothing.
+
+- **Two new Prometheus metrics**, when `/metrics` is enabled:
+  - `speedtest_bufferbloat_factor{direction="down"|"up"}` — the fractional
+    increase in round-trip latency under load: `(loaded - idle) / idle`.
+    Omitted when either idle or loaded latency is missing, or when idle
+    latency is zero — a genuinely instant link does not happen on a LAN; zero
+    here means the reading hit the browser's timing-resolution floor.
+  - `speedtest_quality_score{service}` — the engine's AIM experience ratings
+    (streaming, gaming, rtc) as a numeric score: bad=0, poor=1, average=2,
+    good=3, great=4. Omitted if the run recorded no ratings or if a
+    rating string is unrecognised.
+
+- **A same-origin guard on state-changing endpoints** (`POST /api/results`,
+  `/api/results/{id}/note`, `/api/clients/{ip}/name`). Requests carrying a
+  cross-origin or null `Origin` header are refused with HTTP 403. Requests
+  without an `Origin` header — curl, the test suite, any non-browser caller —
+  pass through unchanged. This is not authentication; the tool remains
+  deliberately unauthenticated on a trusted LAN. This stops a page on an
+  unrelated origin from silently driving these endpoints via a visitor's
+  browser (DNS rebinding / CSRF guard).
+
+### Changed
+
+- **The daily retention pass is now a maintenance pass.** It still deletes
+  old runs and samples, but it also reclaims disk (whether or not anything was
+  deleted) and takes a snapshot if one is configured. With both retention
+  windows at zero — the default — the pass is purely a reclamation and snapshot
+  operation.
+
 ## [1.6.0] - 2026-08-26
 
 Preparing the repository to be public.

@@ -52,6 +52,18 @@ metrics = false
 # what you want: the run still draws its headline afterwards.
 retain_runs_days = 0
 retain_samples_days = 0
+# Where to leave a snapshot of the history database. Empty — the default —
+# means none is taken. When set, the daily maintenance pass writes
+# `history-backup.db` here with VACUUM INTO: a consistent, compacted copy of a
+# database that is still being served, which a plain file copy of a live SQLite
+# database is not. It is written under a temporary name and renamed into place,
+# so a snapshot interrupted halfway never replaces the last good one.
+#
+# Point this at a directory the service can write and that is not the one
+# holding the database itself — startup fails rather than writing a copy over
+# the original. Off by default, because where a second copy of someone's data
+# lives is their decision to make.
+history_backup_dir = ""
 
 [server.reverse_dns]
 # Names clients in the history by asking for their PTR record. Off by default,

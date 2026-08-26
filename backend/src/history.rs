@@ -4,14 +4,17 @@
 //! with last week and one client with another — the thing that vanished when a
 //! LibreSpeed tab was closed.
 //!
-//! Two design choices are worth stating. The full engine summary is stored
+//! Three design choices are worth stating. The full engine summary is stored
 //! verbatim as JSON alongside the extracted columns, so a metric we did not
-//! think to give a column to is not lost. And writes go through a single
+//! think to give a column to is not lost. Writes go through a single
 //! mutex-guarded connection: this is a LAN tool recording one row per test run,
 //! where a connection pool would be more moving parts than the workload
-//! deserves.
+//! deserves. And the database looks after its own disk: deleting rows in SQLite
+//! returns their pages to a free list rather than to the filesystem, so a
+//! deployment that prunes daily would otherwise grow for ever while reporting
+//! fewer and fewer runs.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use rusqlite::{params, Connection, OptionalExtension};
@@ -28,12 +31,38 @@ pub const MAX_SUMMARY_BYTES: usize = 512 * 1024;
 /// an improvement.
 const MAX_POINTS_BYTES: usize = 256 * 1024;
 
+/// The name a snapshot lands under, inside the configured directory.
+///
+/// Fixed rather than timestamped, because this is a last-known-good copy and
+/// not an archive. A dated filename would leave a directory that nothing ever
+/// prunes, which is the problem this module already has to solve once.
+pub const SNAPSHOT_FILE: &str = "history-backup.db";
+
+/// Where a snapshot is written before it is moved into place. A crash halfway
+/// through leaves rubbish here and the previous good snapshot untouched.
+const SNAPSHOT_TEMP_FILE: &str = "history-backup.db.tmp";
+
+/// `PRAGMA auto_vacuum` reports its mode as a number; 2 is `INCREMENTAL`.
+const AUTO_VACUUM_INCREMENTAL: i64 = 2;
+
 #[derive(Debug)]
 pub enum HistoryError {
     Db(rusqlite::Error),
     Json(serde_json::Error),
-    TooLarge { bytes: usize, limit: usize },
+    TooLarge {
+        bytes: usize,
+        limit: usize,
+    },
     NothingMeasured,
+    /// A snapshot could not be written where it was asked to go.
+    Snapshot {
+        path: PathBuf,
+        detail: String,
+    },
+    /// The configured snapshot destination *is* the live database.
+    SnapshotOverwritesDatabase {
+        path: PathBuf,
+    },
 }
 
 impl std::fmt::Display for HistoryError {
@@ -47,6 +76,17 @@ impl std::fmt::Display for HistoryError {
             Self::NothingMeasured => write!(
                 f,
                 "the result contains no measurements at all — refusing to store an empty run"
+            ),
+            Self::Snapshot { path, detail } => {
+                write!(
+                    f,
+                    "could not write a history snapshot to {path:?}: {detail}"
+                )
+            }
+            Self::SnapshotOverwritesDatabase { path } => write!(
+                f,
+                "a history snapshot would be written over the live database at {path:?} — \
+                 point server.history_backup_dir at a different directory"
             ),
         }
     }
@@ -121,6 +161,11 @@ impl SubmittedSummary {
 pub struct Pruned {
     pub runs_deleted: usize,
     pub samples_cleared: usize,
+    /// How much smaller the database file got, measured before and after
+    /// rather than inferred from the row count. Deleting a row and returning
+    /// its disk are separate events in SQLite, and only the second one is
+    /// visible to `df`.
+    pub bytes_reclaimed: u64,
 }
 
 /// One stored run.
@@ -167,6 +212,10 @@ pub struct StoredRunDetail {
 
 pub struct History {
     conn: Mutex<Connection>,
+    /// Where this database lives, when it lives anywhere at all. `None` for the
+    /// in-memory databases the tests and the history-disabled deployment use.
+    /// Kept so a snapshot can be checked against the file it is a copy of.
+    path: Option<PathBuf>,
 }
 
 impl History {
@@ -177,19 +226,23 @@ impl History {
             }
         }
         let conn = Connection::open(path)?;
-        Self::from_connection(conn)
+        Self::from_connection(conn, Some(path.to_path_buf()))
     }
 
     pub fn in_memory() -> Result<Self, HistoryError> {
-        Self::from_connection(Connection::open_in_memory()?)
+        Self::from_connection(Connection::open_in_memory()?, None)
     }
 
-    fn from_connection(conn: Connection) -> Result<Self, HistoryError> {
+    fn from_connection(conn: Connection, path: Option<PathBuf>) -> Result<Self, HistoryError> {
         // WAL keeps a reader on /history from blocking the write that lands at
         // the end of a run.
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
+
+        // Before the schema below, because on a new database that is the only
+        // moment this setting can be taken.
+        Self::enable_incremental_vacuum(&conn)?;
 
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS runs (
@@ -240,7 +293,51 @@ impl History {
 
         Ok(Self {
             conn: Mutex::new(conn),
+            path,
         })
+    }
+
+    /// Puts the database into `auto_vacuum = INCREMENTAL`, converting one that
+    /// is not already there.
+    ///
+    /// SQLite reads this setting once, when the first table is created, which
+    /// is why it is applied above the schema rather than beside the other
+    /// pragmas. On a database that already has tables the assignment is
+    /// **silently ignored** — no error, no warning — and a later
+    /// `PRAGMA incremental_vacuum` then frees nothing while looking like it
+    /// worked. The only way to change the mode afterwards is a full `VACUUM`.
+    ///
+    /// So the pragma is read back rather than assumed, and the `VACUUM` happens
+    /// only when the mode is genuinely wrong. It rewrites the whole file, which
+    /// for a homelab's history is a few megabytes and a fraction of a second,
+    /// and it happens at most once per database: the mode is stored in the file
+    /// header, so every start after the first reads `INCREMENTAL` and does
+    /// nothing.
+    fn enable_incremental_vacuum(conn: &Connection) -> Result<(), HistoryError> {
+        conn.pragma_update(None, "auto_vacuum", "INCREMENTAL")?;
+        if Self::auto_vacuum_mode(conn)? == AUTO_VACUUM_INCREMENTAL {
+            return Ok(());
+        }
+
+        // An existing database, then. The assignment above is now pending and
+        // a rewrite is what applies it.
+        conn.execute_batch("VACUUM")?;
+
+        let mode = Self::auto_vacuum_mode(conn)?;
+        if mode != AUTO_VACUUM_INCREMENTAL {
+            // Not fatal — the history still works, it just will not hand disk
+            // back after a prune. Worth saying out loud, because the symptom
+            // otherwise is a file that only ever grows.
+            tracing::warn!(
+                "auto_vacuum is still mode {mode} after a full VACUUM; pruning will free \
+                 rows but not disk"
+            );
+        }
+        Ok(())
+    }
+
+    fn auto_vacuum_mode(conn: &Connection) -> Result<i64, HistoryError> {
+        Ok(conn.query_row("PRAGMA auto_vacuum", [], |r| r.get(0))?)
     }
 
     /// Brings an existing database up to the current shape.
@@ -477,6 +574,11 @@ impl History {
     ///
     /// Both windows are off by default. Silently deleting a homelab's history
     /// because a default said so is not a behaviour to opt out of.
+    ///
+    /// Reclaiming the disk is part of this call rather than a second one the
+    /// caller has to remember: a prune that frees rows but not space is the
+    /// failure mode this whole path exists to avoid, and making it impossible
+    /// to forget is cheaper than documenting it.
     pub fn prune(
         &self,
         runs_older_than: Option<&str>,
@@ -496,7 +598,113 @@ impl History {
                 params![cutoff],
             )?;
         }
+
+        pruned.bytes_reclaimed = Self::reclaim(&conn)?;
         Ok(pruned)
+    }
+
+    /// Hands freed pages back to the filesystem and truncates the WAL.
+    ///
+    /// Two separate leaks, both invisible from the row count. A `DELETE` moves
+    /// pages onto SQLite's free list, where they are reused by later inserts
+    /// but never returned — `PRAGMA incremental_vacuum` is what returns them,
+    /// and it does nothing at all unless the database is in
+    /// `auto_vacuum = INCREMENTAL`, which is why that is set at open time.
+    ///
+    /// The WAL is the second. Every page touched by a prune is written into it,
+    /// and a plain checkpoint leaves the file sitting at its high-water mark —
+    /// after a large delete, that is the size of everything removed, kept on
+    /// disk indefinitely. `TRUNCATE` is the mode that actually shortens it.
+    fn reclaim(conn: &Connection) -> Result<u64, HistoryError> {
+        let before = Self::file_bytes(conn)?;
+        // Both of these are stepped to completion rather than executed, and
+        // that is not a stylistic choice. `PRAGMA incremental_vacuum` emits one
+        // row per page it frees and stops there, so a statement stepped once
+        // frees exactly one page — 4 KiB of a multi-megabyte prune — while
+        // reporting success. It looked like the pragma was being ignored.
+        drain(conn, "PRAGMA incremental_vacuum")?;
+        drain(conn, "PRAGMA wal_checkpoint(TRUNCATE)")?;
+        Ok(before.saturating_sub(Self::file_bytes(conn)?))
+    }
+
+    /// The size of the database as SQLite itself accounts for it.
+    ///
+    /// Asked of the database rather than of the filesystem so it means the same
+    /// thing for the in-memory databases the tests use.
+    fn file_bytes(conn: &Connection) -> Result<u64, HistoryError> {
+        let pages: i64 = conn.query_row("PRAGMA page_count", [], |r| r.get(0))?;
+        let page_size: i64 = conn.query_row("PRAGMA page_size", [], |r| r.get(0))?;
+        Ok(pages.max(0) as u64 * page_size.max(0) as u64)
+    }
+
+    /// Checks a snapshot directory is usable and returns where the snapshot
+    /// will land, creating the directory if it is not there.
+    ///
+    /// Called at startup as well as before every snapshot, so an unwritable
+    /// directory — or one that would put the copy on top of the original — is a
+    /// refusal to boot rather than a warning nobody reads on the first
+    /// maintenance pass a day later.
+    pub fn prepare_snapshot_dir(&self, dir: &Path) -> Result<PathBuf, HistoryError> {
+        std::fs::create_dir_all(dir).map_err(|e| HistoryError::Snapshot {
+            path: dir.to_path_buf(),
+            detail: e.to_string(),
+        })?;
+
+        let destination = dir.join(SNAPSHOT_FILE);
+        if let Some(live) = &self.path {
+            if same_file(&destination, live) {
+                return Err(HistoryError::SnapshotOverwritesDatabase { path: destination });
+            }
+        }
+        Ok(destination)
+    }
+
+    /// Writes a consistent copy of the database into `dir`, and returns its
+    /// size in bytes.
+    ///
+    /// `VACUUM INTO` rather than a file copy: the database is being served
+    /// while this runs, and copying the file underneath a live writer produces
+    /// something that may or may not open, discovered whenever it is next
+    /// needed. It also compacts on the way out, so the snapshot is the smallest
+    /// honest representation of the data.
+    ///
+    /// The copy is written to a temporary name and renamed into place, because
+    /// the failure this guards against is not a failed snapshot — it is a
+    /// half-written one sitting where the good one used to be. A rename within
+    /// one directory is atomic, so the destination is either the previous
+    /// snapshot or a complete new one, never something in between.
+    pub fn snapshot(&self, dir: &Path) -> Result<u64, HistoryError> {
+        let destination = self.prepare_snapshot_dir(dir)?;
+        let temp = dir.join(SNAPSHOT_TEMP_FILE);
+
+        // `VACUUM INTO` refuses to write to a file that already exists, so a
+        // leftover from a run that died mid-snapshot would otherwise block
+        // every snapshot from here on.
+        if let Err(e) = std::fs::remove_file(&temp) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                return Err(HistoryError::Snapshot {
+                    path: temp,
+                    detail: e.to_string(),
+                });
+            }
+        }
+
+        {
+            let conn = self.conn.lock().expect("history mutex");
+            // The path is bound, not interpolated: a directory name is allowed
+            // to contain a quote, and building this string by hand is how that
+            // becomes a syntax error at 3am.
+            conn.execute("VACUUM INTO ?1", params![temp.to_string_lossy()])?;
+        }
+
+        std::fs::rename(&temp, &destination).map_err(|e| HistoryError::Snapshot {
+            path: destination.clone(),
+            detail: e.to_string(),
+        })?;
+
+        Ok(std::fs::metadata(&destination)
+            .map(|m| m.len())
+            .unwrap_or(0))
     }
 
     pub fn count(&self) -> Result<i64, HistoryError> {
@@ -644,6 +852,39 @@ fn non_empty(value: Option<String>) -> Option<String> {
     value.filter(|s| !s.trim().is_empty())
 }
 
+/// Runs a statement to completion, discarding whatever it emits.
+///
+/// The pragmas this module leans on do their work *while* producing rows, so
+/// stepping once — which is all `execute` does — stops them part-way through.
+fn drain(conn: &Connection, sql: &str) -> Result<(), HistoryError> {
+    let mut stmt = conn.prepare(sql)?;
+    let mut rows = stmt.query([])?;
+    while rows.next()?.is_some() {}
+    Ok(())
+}
+
+/// Whether two paths name the same file, decided by the filesystem rather than
+/// by how they are spelled.
+///
+/// Only the directories are resolved, since the files themselves need not exist
+/// yet — which is enough to settle the question that matters here:
+/// `data/history.db` and `./data/../data/history.db` differ as text and agree
+/// as paths. Comparing the strings would answer the wrong question.
+fn same_file(a: &Path, b: &Path) -> bool {
+    fn resolved(p: &Path) -> Option<PathBuf> {
+        let dir = match p.parent() {
+            Some(d) if !d.as_os_str().is_empty() => d.to_path_buf(),
+            _ => PathBuf::from("."),
+        };
+        Some(std::fs::canonicalize(dir).ok()?.join(p.file_name()?))
+    }
+    match (resolved(a), resolved(b)) {
+        (Some(a), Some(b)) => a == b,
+        // An unresolvable path is not evidence of a collision.
+        _ => false,
+    }
+}
+
 /// How long ago an RFC 3339 timestamp was, or `None` if it will not parse.
 ///
 /// A clock that has moved backwards yields zero rather than a negative age, so
@@ -692,6 +933,53 @@ mod tests {
 
     fn history() -> History {
         History::in_memory().unwrap()
+    }
+
+    /// A submission whose sample blob is large enough to be worth reclaiming,
+    /// and small enough to survive `MAX_POINTS_BYTES`.
+    fn fat_submission(download: f64) -> ResultSubmission {
+        let mut s = submission(download);
+        s.points = serde_json::json!({ "download": vec![download; 18_000] });
+        assert!(
+            serde_json::to_string(&s.points).unwrap().len() < MAX_POINTS_BYTES,
+            "the fixture must not be dropped on the way in"
+        );
+        s
+    }
+
+    /// A directory of this test's own.
+    ///
+    /// Named after the caller as well as the process, because these tests share
+    /// a process and run in parallel — one shared directory would have them
+    /// deleting each other's databases.
+    fn temp_dir(label: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("speedtest-{label}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Everything SQLite has on disk for this database, WAL included.
+    ///
+    /// The WAL is the point: after a large delete it holds every page that was
+    /// touched, so measuring only `history.db` would report a saving that the
+    /// filesystem has not actually seen.
+    fn on_disk(db: &Path) -> u64 {
+        ["", "-wal", "-shm"]
+            .iter()
+            .map(|suffix| {
+                let mut name = db.as_os_str().to_os_string();
+                name.push(suffix);
+                std::fs::metadata(PathBuf::from(name))
+                    .map(|m| m.len())
+                    .unwrap_or(0)
+            })
+            .sum()
+    }
+
+    fn mode(h: &History) -> i64 {
+        let conn = h.conn.lock().unwrap();
+        History::auto_vacuum_mode(&conn).unwrap()
     }
 
     #[test]
@@ -922,5 +1210,302 @@ mod tests {
             time::OffsetDateTime::parse(&now, &time::format_description::well_known::Rfc3339)
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn a_new_database_is_created_in_incremental_auto_vacuum() {
+        // Asserted against the running database rather than against the line
+        // that sets it. SQLite reads this pragma once, when the first table is
+        // created, and ignores it in silence afterwards — a correct-looking
+        // assignment made one statement too late reads back as mode 0 and
+        // nothing anywhere says so.
+        let dir = temp_dir("autovacuum-new");
+        let h = History::open(&dir.join("history.db")).unwrap();
+        assert_eq!(mode(&h), AUTO_VACUUM_INCREMENTAL);
+
+        // And the in-memory databases the tests run on, which go through the
+        // same path and would otherwise let every other test here pass while
+        // the deployed database reclaimed nothing.
+        assert_eq!(mode(&history()), AUTO_VACUUM_INCREMENTAL);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_database_created_before_this_is_converted_and_keeps_its_rows() {
+        // Every deployment that already exists has a database in mode 0, where
+        // the pragma is accepted and ignored. Converting it costs one full
+        // VACUUM, once, and the alternative is a file that grows for ever on
+        // exactly the installations with the most history to prune.
+        let dir = temp_dir("autovacuum-existing");
+        let path = dir.join("history.db");
+
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE runs (
+                     id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                     recorded_at TEXT NOT NULL,
+                     client_ip   TEXT NOT NULL,
+                     user_agent  TEXT NOT NULL DEFAULT '',
+                     profile     TEXT NOT NULL DEFAULT '',
+                     download    REAL, upload REAL, latency REAL, jitter REAL,
+                     down_loaded_latency REAL, up_loaded_latency REAL,
+                     packet_loss REAL, total_duration_ms REAL,
+                     scores_json  TEXT NOT NULL DEFAULT '{}',
+                     summary_json TEXT NOT NULL DEFAULT '{}'
+                 );
+                 INSERT INTO runs (recorded_at, client_ip, download)
+                 VALUES ('2026-08-24T10:00:00Z', '10.0.0.1', 9.4e8);",
+            )
+            .unwrap();
+            let existing: i64 = conn
+                .query_row("PRAGMA auto_vacuum", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(existing, 0, "the fixture must start in the old mode");
+        }
+
+        let h = History::open(&path).unwrap();
+        assert_eq!(mode(&h), AUTO_VACUUM_INCREMENTAL);
+        assert_eq!(h.count().unwrap(), 1, "the VACUUM must not lose the row");
+        assert_eq!(h.recent(1, None).unwrap()[0].download, Some(9.4e8));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pruning_hands_the_disk_back_instead_of_only_the_rows() {
+        // The property, not the pragma: a prune that deletes every row while
+        // the file stays the same size is the failure this guards against, and
+        // it is indistinguishable from success in the row count alone. The WAL
+        // is measured too, because a checkpoint without TRUNCATE leaves it at
+        // the high-water mark — which after this prune is everything deleted.
+        let dir = temp_dir("prune-reclaim");
+        let path = dir.join("history.db");
+        let h = History::open(&path).unwrap();
+
+        for i in 0..24 {
+            h.record(
+                &fat_submission(9.4e8),
+                "10.0.0.1",
+                "ua",
+                &format!("2026-08-{:02}T10:00:00Z", i + 1),
+            )
+            .unwrap();
+        }
+        let before = on_disk(&path);
+        assert!(before > 2 * 1024 * 1024, "fixture too small to be a test");
+
+        let pruned = h.prune(Some("2026-09-01T00:00:00Z"), None).unwrap();
+        assert_eq!(pruned.runs_deleted, 24);
+        assert_eq!(h.count().unwrap(), 0);
+        assert!(
+            pruned.bytes_reclaimed > 0,
+            "SQLite freed the pages but kept the file"
+        );
+
+        let after = on_disk(&path);
+        assert!(
+            after < before / 4,
+            "still {after} bytes on disk against {before} before the prune"
+        );
+
+        let mut wal = path.as_os_str().to_os_string();
+        wal.push("-wal");
+        let wal = std::fs::metadata(PathBuf::from(wal))
+            .map(|m| m.len())
+            .unwrap_or(0);
+        assert!(
+            wal < 256 * 1024,
+            "the WAL is {wal} bytes — it was checkpointed but not truncated"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pruning_nothing_is_still_safe_to_run() {
+        // Both windows off is the default, and a deployment that only wants the
+        // nightly snapshot takes this path every day.
+        let h = history();
+        h.record(&submission(1.0e9), "10.0.0.1", "ua", "2026-08-24T10:00:00Z")
+            .unwrap();
+
+        let pruned = h.prune(None, None).unwrap();
+        assert_eq!(pruned, Pruned::default());
+        assert_eq!(h.count().unwrap(), 1, "nothing was asked for, nothing went");
+    }
+
+    #[test]
+    fn a_snapshot_is_a_readable_database_holding_the_same_runs() {
+        // A backup that cannot be opened is worse than none, because it is
+        // believed. So the copy is opened and questioned rather than weighed.
+        let dir = temp_dir("snapshot-valid");
+        let backups = dir.join("backups");
+        let h = History::open(&dir.join("history.db")).unwrap();
+
+        for i in 0..3 {
+            h.record(
+                &submission(1.0e9),
+                "10.0.0.1",
+                "ua",
+                &format!("2026-08-2{i}T10:00:00Z"),
+            )
+            .unwrap();
+        }
+
+        let bytes = h.snapshot(&backups).unwrap();
+        assert!(bytes > 0);
+
+        let copy = backups.join(SNAPSHOT_FILE);
+        assert!(copy.is_file(), "{copy:?} should exist");
+        assert!(
+            !backups.join(SNAPSHOT_TEMP_FILE).exists(),
+            "the temporary file should have been renamed away, not left behind"
+        );
+
+        let conn = rusqlite::Connection::open(&copy).unwrap();
+        let integrity: String = conn
+            .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(integrity, "ok");
+        let runs: i64 = conn
+            .query_row("SELECT COUNT(*) FROM runs", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(runs, 3);
+        let download: f64 = conn
+            .query_row("SELECT download FROM runs LIMIT 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(download, 1.0e9);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_half_written_snapshot_left_by_a_crash_neither_blocks_nor_replaces_the_good_one() {
+        // `VACUUM INTO` refuses an existing file, so rubbish at the temporary
+        // name would otherwise stop every snapshot from that day onwards —
+        // silently, once a day, until someone looked. The previous good copy
+        // must also still be the previous good copy: the rename is what makes
+        // that true, and this is the closest a test in one process can get to
+        // watching it.
+        let dir = temp_dir("snapshot-crash");
+        let backups = dir.join("backups");
+        let h = History::open(&dir.join("history.db")).unwrap();
+
+        h.record(&submission(1.0e9), "10.0.0.1", "ua", "2026-08-24T10:00:00Z")
+            .unwrap();
+        h.snapshot(&backups).unwrap();
+
+        // What a process killed mid-`VACUUM INTO` leaves behind.
+        std::fs::write(
+            backups.join(SNAPSHOT_TEMP_FILE),
+            b"SQLite format 3\0truncated",
+        )
+        .unwrap();
+
+        // The good snapshot is untouched by that, and still opens.
+        let copy = backups.join(SNAPSHOT_FILE);
+        let conn = rusqlite::Connection::open(&copy).unwrap();
+        let runs: i64 = conn
+            .query_row("SELECT COUNT(*) FROM runs", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(runs, 1);
+        drop(conn);
+
+        h.record(&submission(2.0e9), "10.0.0.1", "ua", "2026-08-25T10:00:00Z")
+            .unwrap();
+        h.snapshot(&backups).unwrap();
+
+        let conn = rusqlite::Connection::open(&copy).unwrap();
+        let runs: i64 = conn
+            .query_row("SELECT COUNT(*) FROM runs", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            runs, 2,
+            "the second snapshot should have replaced the first"
+        );
+        assert!(!backups.join(SNAPSHOT_TEMP_FILE).exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_snapshot_refuses_to_be_written_over_the_live_database() {
+        // Naming the database `history-backup.db` and its own directory as the
+        // backup directory would rename a copy of the database on top of the
+        // database. The check is made against the filesystem rather than
+        // against the spelling of the two paths, so a directory reached by a
+        // different-looking route is still the same directory.
+        let dir = temp_dir("snapshot-collision");
+        let h = History::open(&dir.join(SNAPSHOT_FILE)).unwrap();
+
+        assert!(matches!(
+            h.snapshot(&dir),
+            Err(HistoryError::SnapshotOverwritesDatabase { .. })
+        ));
+        assert!(matches!(
+            h.snapshot(&dir.join("sub").join("..")),
+            Err(HistoryError::SnapshotOverwritesDatabase { .. })
+        ));
+
+        // The database is still there, and still a database.
+        assert_eq!(h.count().unwrap(), 0);
+
+        // A different directory is fine, even though the name is the same.
+        h.snapshot(&dir.join("elsewhere")).unwrap();
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_snapshot_directory_whose_name_contains_a_quote_still_round_trips() {
+        // `VACUUM INTO` takes an expression, and the obvious way to write it is
+        // to paste the path into the SQL. Round-tripped through SQLite rather
+        // than inspected as a string: this passes only if the path is bound.
+        let dir = temp_dir("snapshot-quoting");
+        let awkward = dir.join("Stephen's backups; DROP TABLE runs--");
+        let h = History::open(&dir.join("history.db")).unwrap();
+        h.record(&submission(1.0e9), "10.0.0.1", "ua", "2026-08-24T10:00:00Z")
+            .unwrap();
+
+        h.snapshot(&awkward).unwrap();
+
+        let conn = rusqlite::Connection::open(awkward.join(SNAPSHOT_FILE)).unwrap();
+        let runs: i64 = conn
+            .query_row("SELECT COUNT(*) FROM runs", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(runs, 1);
+        assert_eq!(
+            h.count().unwrap(),
+            1,
+            "and the original still has its table"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_unusable_snapshot_directory_is_reported_before_it_is_needed() {
+        // `prepare_snapshot_dir` is what startup calls, so a directory that
+        // cannot be made is a refusal to boot rather than a warning at 3am.
+        let dir = temp_dir("snapshot-unusable");
+        let file = dir.join("not-a-directory");
+        std::fs::write(&file, b"x").unwrap();
+
+        let h = History::open(&dir.join("history.db")).unwrap();
+        assert!(matches!(
+            h.prepare_snapshot_dir(&file),
+            Err(HistoryError::Snapshot { .. })
+        ));
+
+        // And the usable case returns where the snapshot will land, which is
+        // what the startup log says out loud.
+        assert_eq!(
+            h.prepare_snapshot_dir(&dir.join("backups")).unwrap(),
+            dir.join("backups").join(SNAPSHOT_FILE)
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -81,14 +81,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Arc::new(db))
     };
 
-    // Retention, if it was asked for. Runs once at startup and then daily —
-    // a long-lived homelab service is restarted rarely enough that
-    // startup-only would let a database grow for months between prunes.
+    // Database maintenance, if any of it was asked for. Runs once at startup
+    // and then daily — a long-lived homelab service is restarted rarely enough
+    // that startup-only would let a database grow for months between prunes.
     if let Some(db) = history.clone() {
         let runs_days = config.server.retain_runs_days;
         let samples_days = config.server.retain_samples_days;
-        if runs_days > 0 || samples_days > 0 {
-            spawn_retention(db, runs_days, samples_days);
+
+        // Checked here rather than on the first pass a day from now: an
+        // unwritable directory, or one that would put the snapshot on top of
+        // the live database, should stop the service starting.
+        let backup_dir = match config.server.backup_dir() {
+            None => None,
+            Some(dir) => {
+                let destination = db.prepare_snapshot_dir(dir).map_err(|e| {
+                    tracing::error!("server.history_backup_dir: {e}");
+                    e
+                })?;
+                tracing::info!("history snapshots to {}", destination.display());
+                Some(dir.to_path_buf())
+            }
+        };
+
+        if runs_days > 0 || samples_days > 0 || backup_dir.is_some() {
+            spawn_maintenance(db, runs_days, samples_days, backup_dir);
         }
     }
 
@@ -185,12 +201,22 @@ async fn shutdown_signal() {
     tracing::info!("shutting down");
 }
 
-/// Prunes now, and once a day thereafter.
+/// Prunes, reclaims and snapshots — now, and once a day thereafter.
 ///
 /// The cutoffs are recomputed on every pass rather than once at startup: a
 /// window computed at boot would stop moving, so a service left running for a
 /// month would quietly stop pruning anything.
-fn spawn_retention(db: Arc<History>, runs_days: u32, samples_days: u32) {
+///
+/// A deployment can want the snapshot without either retention window, so this
+/// runs whenever any of the three is configured. With both windows at zero the
+/// prune deletes nothing and the pass is a WAL truncation and a copy, which is
+/// exactly what a nightly backup should be.
+fn spawn_maintenance(
+    db: Arc<History>,
+    runs_days: u32,
+    samples_days: u32,
+    backup_dir: Option<PathBuf>,
+) {
     tracing::info!(
         "retention: runs {} days, samples {} days (0 = keep)",
         runs_days,
@@ -213,23 +239,42 @@ fn spawn_retention(db: Arc<History>, runs_days: u32, samples_days: u32) {
             let samples_cutoff = cutoff(samples_days);
 
             // Blocking work on a blocking thread: rusqlite is synchronous, and
-            // a DELETE over a large table would otherwise stall the runtime
-            // that is meant to be serving a measurement at the time.
+            // a DELETE over a large table — or a VACUUM INTO of the whole
+            // database — would otherwise stall the runtime that is meant to be
+            // serving a measurement at the time.
             let db = db.clone();
-            let pruned = tokio::task::spawn_blocking(move || {
-                db.prune(runs_cutoff.as_deref(), samples_cutoff.as_deref())
+            let dir = backup_dir.clone();
+            let pass = tokio::task::spawn_blocking(move || {
+                let pruned = db.prune(runs_cutoff.as_deref(), samples_cutoff.as_deref())?;
+                // After the prune, so the copy is of the pruned database and
+                // not of the pages that were about to go.
+                let snapshot = match &dir {
+                    Some(dir) => Some(db.snapshot(dir)?),
+                    None => None,
+                };
+                Ok::<_, lan_speedtest::history::HistoryError>((pruned, snapshot))
             })
             .await;
 
-            match pruned {
-                Ok(Ok(p)) if p.runs_deleted > 0 || p.samples_cleared > 0 => tracing::info!(
-                    "retention: deleted {} run(s), released samples from {}",
-                    p.runs_deleted,
-                    p.samples_cleared
-                ),
-                Ok(Ok(_)) => tracing::debug!("retention: nothing to prune"),
-                Ok(Err(e)) => tracing::warn!("retention pass failed: {e}"),
-                Err(e) => tracing::warn!("retention task panicked: {e}"),
+            match pass {
+                Ok(Ok((p, snapshot))) => {
+                    if p.runs_deleted > 0 || p.samples_cleared > 0 || p.bytes_reclaimed > 0 {
+                        tracing::info!(
+                            "retention: deleted {} run(s), released samples from {}, \
+                             returned {} KiB to the filesystem",
+                            p.runs_deleted,
+                            p.samples_cleared,
+                            p.bytes_reclaimed / 1024
+                        );
+                    } else {
+                        tracing::debug!("retention: nothing to prune");
+                    }
+                    if let Some(bytes) = snapshot {
+                        tracing::info!("history snapshot written ({} KiB)", bytes / 1024);
+                    }
+                }
+                Ok(Err(e)) => tracing::warn!("maintenance pass failed: {e}"),
+                Err(e) => tracing::warn!("maintenance task panicked: {e}"),
             }
 
             tokio::time::sleep(DAY).await;

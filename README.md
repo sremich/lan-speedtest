@@ -32,7 +32,7 @@ jitter and packet loss answer and a plain throughput test does not.
 | History | Every run stored, with a trend chart, per-client filtering, and a permalink that redraws the run rather than summarising it |
 | Descriptions | A free-text note per run — where you were, on what, what you were testing |
 | Compare | Two runs side by side, with the difference computed and signed by improvement rather than by arithmetic |
-| Metrics | Optional Prometheus endpoint: the latest run per client, in base units |
+| Metrics | Optional Prometheus endpoint: the latest run per client in base units, plus bufferbloat factor and AIM quality scores per service |
 
 ## Nothing leaves your network
 
@@ -84,6 +84,11 @@ at its 250 ms default and no LAN transfer is slow enough to count as loading the
 connection, so loaded latency is never measured — which silently removes
 **every** quality rating, with no error shown.
 [Configuration](https://github.com/sremich/lan-speedtest/wiki/Configuration) covers the sizing rules.
+
+Optional point-in-time snapshots of the history database are available via
+`server.history_backup_dir` (or environment variable). When set, the daily
+maintenance pass writes a consistent copy to that directory — useful for
+off-site backup or as a last-known-good copy of the current history.
 
 ## Who ran the test
 

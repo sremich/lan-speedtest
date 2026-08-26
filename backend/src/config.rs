@@ -78,6 +78,19 @@ pub struct ServerConfig {
     /// is what the contract tests and the e2e suite use.
     #[serde(default = "default_history_db")]
     pub history_db: String,
+    /// Where to leave a snapshot of the history database. Empty — the default —
+    /// means no snapshot is ever taken.
+    ///
+    /// When set, the daily maintenance pass writes `history-backup.db` here
+    /// with `VACUUM INTO`, which produces a consistent copy of a database that
+    /// is still being served. Copying the file instead would produce something
+    /// that may or may not open, found out whenever it was next needed.
+    ///
+    /// Off by default because a backup is a decision about where a second copy
+    /// of someone's data lives, and this tool should not make that decision on
+    /// their behalf.
+    #[serde(default)]
+    pub history_backup_dir: String,
     /// CIDR blocks whose `X-Forwarded-For` header may be believed.
     ///
     /// Empty by default, and that default is the safe one: with no proxy in
@@ -168,6 +181,7 @@ impl Default for ServerConfig {
             tls_cert_file: None,
             tls_key_file: None,
             history_db: default_history_db(),
+            history_backup_dir: String::new(),
             autostart: default_autostart(),
             retain_runs_days: 0,
             retain_samples_days: 0,
@@ -186,6 +200,13 @@ impl ServerConfig {
             (Some(c), Some(k)) if !c.is_empty() && !k.is_empty() => Some((c, k)),
             _ => None,
         }
+    }
+
+    /// The snapshot directory, or `None` when snapshots are off. Whitespace is
+    /// not a directory name, so it reads as off rather than as a path.
+    pub fn backup_dir(&self) -> Option<&Path> {
+        let trimmed = self.history_backup_dir.trim();
+        (!trimmed.is_empty()).then(|| Path::new(trimmed))
     }
 }
 
@@ -346,6 +367,7 @@ pub enum ConfigError {
     },
     TurnEnabledWithoutCredentials,
     HalfConfiguredTls,
+    BackupWithoutHistory,
     BadCidr {
         field: &'static str,
         detail: String,
@@ -376,6 +398,11 @@ impl std::fmt::Display for ConfigError {
                 f,
                 "exactly one of server.tls_cert_file / server.tls_key_file is set. \
                  Set both to serve HTTPS, or neither to serve plain HTTP"
+            ),
+            Self::BackupWithoutHistory => write!(
+                f,
+                "server.history_backup_dir names a snapshot directory but server.history_db \
+                 is empty, so history is off and there is no database to snapshot"
             ),
             Self::BadCidr { field, detail } => write!(f, "server.{field}: {detail}"),
             Self::BadResolver(detail) => write!(
@@ -419,6 +446,11 @@ impl Config {
             // Deliberately accepts an empty value: that is how history is
             // turned off, so `non_empty_env` would be wrong here.
             self.server.history_db = v.trim().to_string();
+        }
+        if let Ok(v) = std::env::var("SPEEDTEST_HISTORY_BACKUP_DIR") {
+            // Empty on purpose again: that is how a deployment turns snapshots
+            // back off without editing the file it inherited.
+            self.server.history_backup_dir = v.trim().to_string();
         }
         if let Some(v) = non_empty_env("SPEEDTEST_TLS_CERT_FILE") {
             self.server.tls_cert_file = Some(v);
@@ -523,6 +555,13 @@ impl Config {
         // looks like it worked right up until a browser refuses to connect.
         if self.server.tls_cert_file.is_some() != self.server.tls_key_file.is_some() {
             return Err(ConfigError::HalfConfiguredTls);
+        }
+
+        // Asking for backups of a history that is switched off is a mistake
+        // worth naming: silently taking none would leave someone believing
+        // their measurements were being copied somewhere.
+        if self.server.backup_dir().is_some() && self.server.history_db.trim().is_empty() {
+            return Err(ConfigError::BackupWithoutHistory);
         }
 
         // Parsed at startup rather than per request. A typo in a trusted-proxy
@@ -791,6 +830,66 @@ site_name = '   '
         c.server.tls_cert_file = None;
         c.server.tls_key_file = Some("/tls/privkey.pem".into());
         assert!(matches!(c.validate(), Err(ConfigError::HalfConfiguredTls)));
+    }
+
+    #[test]
+    fn snapshots_are_off_unless_a_directory_is_named() {
+        // Where a second copy of someone's measurements lives is their
+        // decision, so the default has to be "nowhere".
+        let c = parse(MINIMAL);
+        assert!(c.server.backup_dir().is_none());
+
+        let named = parse(&format!(
+            "{MINIMAL}
+[server]
+history_backup_dir = '  /srv/backups  '
+"
+        ));
+        assert_eq!(
+            named.server.backup_dir(),
+            Some(Path::new("/srv/backups")),
+            "surrounding whitespace should not become part of the path"
+        );
+
+        // Whitespace alone is not a directory name; it reads as off.
+        let blank = parse(&format!(
+            "{MINIMAL}
+[server]
+history_backup_dir = '   '
+"
+        ));
+        assert!(blank.server.backup_dir().is_none());
+    }
+
+    #[test]
+    fn a_snapshot_directory_with_history_switched_off_is_rejected() {
+        // Taking no backups in silence would leave someone believing their
+        // history was being copied somewhere. There is no database to copy.
+        let mut c: Config = toml::from_str(MINIMAL).unwrap();
+        c.server.history_backup_dir = "/srv/backups".into();
+        c.server.history_db = String::new();
+        assert!(matches!(
+            c.validate(),
+            Err(ConfigError::BackupWithoutHistory)
+        ));
+
+        // With a database configured it is simply a setting.
+        c.server.history_db = "data/history.db".into();
+        assert!(c.validate().is_ok());
+    }
+
+    #[test]
+    fn the_shipped_config_takes_no_snapshots_and_deletes_nothing() {
+        // The file an operator inherits must not quietly copy their data
+        // somewhere or start deleting it. Checked against the real config
+        // rather than a fixture, because that is the one that ships.
+        let raw = std::fs::read_to_string("../config/speedtest.toml")
+            .expect("config/speedtest.toml is readable from the crate dir");
+        let cfg: Config = toml::from_str(&raw).expect("shipped config parses");
+        assert!(cfg.server.backup_dir().is_none());
+        assert_eq!(cfg.server.retain_runs_days, 0);
+        assert_eq!(cfg.server.retain_samples_days, 0);
+        cfg.validate().expect("the shipped config is valid");
     }
 
     #[test]
