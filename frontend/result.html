@@ -99,6 +99,10 @@
 
       <footer class="page__foot">
         <span id="client" data-testid="result-client"></span>
+        <!-- Where the run was taken, when it was tagged. Hidden rather than
+             shown empty: most runs have no room, and an em dash in the footer
+             of every one of them says nothing. -->
+        <span id="location" data-testid="result-location" hidden></span>
         <span id="measured-at" data-testid="measured-at"></span>
         <span id="profile" data-testid="profile"></span>
         <span id="agent" data-testid="result-agent"></span>

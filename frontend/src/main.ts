@@ -26,6 +26,7 @@ import {
   formatPacketLoss,
   latencyIsAtBrowserResolution,
 } from './format';
+import { setUpLocationPicker } from './location';
 import { measureParallelThroughput, suggestedProfile } from './parallel';
 import { formatPayload, planStages, renderChevrons, totalRequests, type Stage } from './progress';
 import { formatTransferSize, summarise } from './stats';
@@ -123,6 +124,14 @@ const ui = {
   phaseDetail: el('phase-detail'),
   stepTip: el('step-tip'),
 };
+
+/**
+ * The room this run is being taken in, chosen before it starts.
+ *
+ * Set up here rather than in `bootstrap`, so the row is populated from the
+ * remembered choice on the first paint instead of appearing a fetch later.
+ */
+const places = setUpLocationPicker();
 
 /** Human labels for the engine's AIM experience keys. */
 const AIM_LABELS: Record<string, string> = {
@@ -658,6 +667,8 @@ async function run(): Promise<void> {
   }`;
   ui.build.textContent = `v${status.version} · ${status.gitSha}`;
   ui.historyLink.hidden = !status.historyEnabled;
+  // A tag is only worth choosing if there is somewhere for it to be kept.
+  places.enable(status.historyEnabled);
   // Stands in for the server-location map on speed.cloudflare.com. That needs
   // external tiles, which would leave the LAN — the one thing this must not
   // do — and on a LAN the useful half is knowing which machine you are on.
@@ -722,6 +733,11 @@ async function run(): Promise<void> {
       } catch {
         scores = {};
       }
+      // Read at the moment the run finishes rather than when it started: the
+      // reader is standing in the room, and correcting the tag mid-run is a
+      // correction, not a lie about where the numbers came from.
+      const location = places.current();
+
       void submitResult({
         summary: results.getSummary() as unknown as Record<string, unknown>,
         scores,
@@ -729,9 +745,14 @@ async function run(): Promise<void> {
         // Stored so the run can be reopened and redrawn, rather than reduced
         // to the headline the moment you navigate away from it.
         points: samplesOf(results) as unknown as Record<string, unknown>,
+        ...(location ? { location } : {}),
       }).then((id) => {
         document.body.dataset.resultStored = id === undefined ? 'no' : 'yes';
-        if (id !== undefined) showPermalink(id);
+        if (id === undefined) return;
+        showPermalink(id);
+        // The tag that was just used is now a tag the server knows about, so
+        // the next visit is offered it without typing it again.
+        if (location) void places.refresh();
       });
     }
   };
@@ -920,7 +941,11 @@ async function bootstrap(): Promise<void> {
   // behaviour, so a status endpoint failing never leaves the page inert.
   let serverDefault = true;
   try {
-    serverDefault = (await fetchStatus()).autostart;
+    const status = await fetchStatus();
+    serverDefault = status.autostart;
+    // Before the run rather than during it: the tag has to be choosable while
+    // the page is idle, which is the whole point of choosing it up front.
+    places.enable(status.historyEnabled);
   } catch {
     // Keep the default; `run` will surface the real failure.
   }

@@ -303,6 +303,10 @@ mod tests {
             scores: Default::default(),
             note: None,
             app_version: Some("1.5.0".into()),
+            // Deliberately set in the fixture while never appearing in any
+            // assertion: a location must not become a Prometheus label, since
+            // every fresh spelling would mint a new time series.
+            location: Some("attic".into()),
         }
     }
 

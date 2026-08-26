@@ -56,6 +56,7 @@ const ui = {
   aim: el('aim'),
   detailBody: el('detail-body'),
   client: el('client'),
+  location: el('location'),
   measuredAt: el('measured-at'),
   profile: el('profile'),
   agent: el('agent'),
@@ -137,6 +138,10 @@ function render(run: StoredRunDetail): void {
   // with anything else on the network.
   const label = clientLabel(run);
   ui.client.textContent = label === run.clientIp ? `client: ${label}` : `${label} · ${run.clientIp}`;
+  // One more fact of the same kind as the profile and the client: which room
+  // the machine was in when this was measured.
+  ui.location.textContent = run.location ? `location: ${run.location}` : '';
+  ui.location.hidden = !run.location;
   ui.measuredAt.textContent =
     `Measured ${formatWhen(run.recordedAt)}` +
     (run.totalDurationMs !== null ? ` · took ${formatDuration(run.totalDurationMs)}` : '');

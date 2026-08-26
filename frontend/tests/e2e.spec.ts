@@ -809,6 +809,23 @@ test('changing the profile clears the result instead of launching a new run', as
   await expect(page.getByTestId('download')).toHaveText('—');
 });
 
+test('a deployment that keeps no history offers no location tagging', async ({ page }) => {
+  // Tagging a run with the room it was taken in only means anything if the run
+  // is kept. This backend is started without a database, so the chip row would
+  // be a control that silently does nothing — hidden for the same reason the
+  // history link is. The tagging itself is exercised in `history.spec.ts`,
+  // which starts a backend that can store what it collects.
+  await page.goto('/?autostart=0');
+
+  // Idle, so the status fetch that decides this has certainly resolved: the
+  // row must be hidden because the deployment says so, not because it has not
+  // been told yet.
+  await expect(page.locator('body')).toHaveAttribute('data-test-state', 'idle');
+
+  await expect(page.getByTestId('places')).toBeHidden();
+  await expect(page.getByTestId('history-link')).toBeHidden();
+});
+
 test('the theme can be switched, and is remembered', async ({ page }) => {
   await page.goto('/?autostart=0');
 

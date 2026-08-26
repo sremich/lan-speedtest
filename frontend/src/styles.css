@@ -676,6 +676,7 @@ g.box__row.is-hovered .box__box {
 
 @media (prefers-reduced-motion: reduce) {
   .btn,
+  .chip,
   .chev {
     transition: none;
   }
@@ -1070,6 +1071,119 @@ g.box__row.is-hovered .box__box {
 
 .idle-note {
   margin-top: 8px;
+}
+
+/* --- location chips -------------------------------------------------------
+
+   Where a run was taken, chosen before it starts. Sized for a thumb rather
+   than a mouse: this is pressed while standing in the room being measured,
+   holding a phone, which is the entire reason the tags exist. */
+
+.places {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  /* Lets a long tag ellipsise rather than widen the page. */
+  min-width: 0;
+}
+
+.places__label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-dim);
+}
+
+.places__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.chip {
+  /* Comfortably tappable, and the same height as the field beside it. */
+  min-height: 36px;
+  max-width: 100%;
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-raised);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+
+.chip:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+/* The selected room, unmistakably. Colour alone would not do it: the row is
+   read at a glance, at arm's length, in whatever light the room has. */
+.chip[aria-pressed='true'] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* Dashed, because it makes a tag rather than choosing one. */
+.chip--add {
+  border-style: dashed;
+}
+
+.places__new {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.places__input {
+  min-height: 36px;
+  width: min(220px, 60vw);
+  padding: 7px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  color: var(--text);
+  font: inherit;
+  /* Exactly 16px, and deliberately not smaller: iOS zooms the whole page in
+     when a field below that is focused, and zooming out again mid-walk is not
+     something anyone should have to do to name a room. */
+  font-size: 1rem;
+}
+
+.places__input:focus {
+  border-color: var(--accent);
+}
+
+.places__input::placeholder {
+  color: var(--text-dim);
+  opacity: 0.7;
+}
+
+/* The two buttons beside the field, which are confirmations rather than
+   destinations and should not out-weigh the chips. */
+.btn--sm {
+  min-height: 36px;
+  padding: 6px 12px;
+  font-size: 0.8rem;
+}
+
+/* The room a stored run was taken in. */
+.cell--place {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Comparing two runs. */

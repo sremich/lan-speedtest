@@ -189,6 +189,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/results/{id}", get(get_result))
         .route("/api/history", get(list_history))
         .route("/api/clients", get(list_clients))
+        .route("/api/locations", get(list_locations))
         .merge(mutating)
         // Always routed, and 404 from the handler when it is turned off.
         //
@@ -612,6 +613,11 @@ struct HistoryQuery {
     /// know its own LAN address.
     #[serde(default)]
     client: Option<String>,
+    /// Restrict to runs tagged with exactly this location. The tags on offer
+    /// come from `/api/locations`, so an exact match is the right strictness:
+    /// the filter is fed chosen values, not typed ones.
+    #[serde(default)]
+    location: Option<String>,
 }
 
 /// `GET /api/history` — stored runs, newest first.
@@ -630,9 +636,27 @@ async fn list_history(
         Some("mine") => Some(me.as_str()),
         Some(other) => Some(other),
     };
+    // An empty parameter means "no filter", the same as its absence — a form
+    // that submits `location=` should not be asking for untagged runs only.
+    let location = q.location.as_deref().filter(|l| !l.is_empty());
 
-    match history.recent(q.limit.unwrap_or(100), filter) {
+    match history.recent(q.limit.unwrap_or(100), filter, location) {
         Ok(runs) => axum::Json(runs).into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+/// `GET /api/locations` — every location tag in use, most recently used first.
+///
+/// Read-only, so it lives outside the same-origin guard with the other reads:
+/// the guard exists for requests that change something, and a picker that
+/// cannot load its options is the only thing refusing this would achieve.
+async fn list_locations(State(state): State<AppState>) -> Response {
+    let Some(history) = state.history.as_ref() else {
+        return axum::Json(Vec::<String>::new()).into_response();
+    };
+    match history.locations() {
+        Ok(locations) => axum::Json(locations).into_response(),
         Err(e) => e.into_response(),
     }
 }

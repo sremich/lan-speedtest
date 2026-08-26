@@ -30,6 +30,11 @@
           <select class="select" id="client-filter" data-testid="client-filter" aria-label="Filter by client">
             <option value="all">All clients</option>
           </select>
+          <!-- Shown only once runs have been tagged: an empty filter is a
+               control that can only be set back to where it already is. -->
+          <select class="select" id="location-filter" data-testid="location-filter" aria-label="Filter by location" hidden>
+            <option value="all">All locations</option>
+          </select>
           <button class="btn" id="rename" data-testid="rename" type="button" hidden>
             Rename client
           </button>
@@ -62,6 +67,7 @@
               <th scope="col" class="cell--pick"><span class="visually-hidden">Compare</span></th>
               <th scope="col">When</th>
               <th scope="col">Client</th>
+              <th scope="col">Location</th>
               <th scope="col" class="cell--num">Download</th>
               <th scope="col" class="cell--num">Upload</th>
               <th scope="col" class="cell--num">Latency</th>

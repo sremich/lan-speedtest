@@ -804,6 +804,167 @@ async fn a_run_can_be_annotated_after_the_fact() {
 }
 
 #[tokio::test]
+async fn a_run_submitted_with_a_location_carries_it_everywhere_a_run_is_shown() {
+    // The tag arrives with the run rather than after it, unlike the note:
+    // which room you were standing in is remembered at the moment the test
+    // finishes and nowhere else.
+    let history = Arc::new(History::in_memory().unwrap());
+    let base = serve(Some(history)).await;
+    let c = client();
+
+    let mut body = submission(9.4e8, "lan-1g");
+    body["location"] = serde_json::json!("  study desk  ");
+    let res = c
+        .post(format!("{base}/api/results"))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 201);
+    let id = res.json::<serde_json::Value>().await.unwrap()["id"]
+        .as_i64()
+        .unwrap();
+
+    // Trimmed server-side, and present in the list...
+    let runs: serde_json::Value = c
+        .get(format!("{base}/api/history"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(runs[0]["location"], "study desk");
+
+    // ...and on the permalink, which reads through a different query.
+    let one: serde_json::Value = c
+        .get(format!("{base}/api/results/{id}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(one["location"], "study desk");
+
+    // A run that says nothing reads back as null — the one spelling of
+    // absence the front end has to test for. Whitespace collapses to it too.
+    let mut blank = submission(1.0e9, "lan-1g");
+    blank["location"] = serde_json::json!("   ");
+    c.post(format!("{base}/api/results"))
+        .json(&blank)
+        .send()
+        .await
+        .unwrap();
+
+    let runs: serde_json::Value = c
+        .get(format!("{base}/api/history"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(runs[0]["location"].is_null());
+}
+
+#[tokio::test]
+async fn history_filters_by_location_and_an_unknown_one_is_empty_not_an_error() {
+    let history = Arc::new(History::in_memory().unwrap());
+    let base = serve(Some(history)).await;
+    let c = client();
+
+    for (download, loc) in [(1.0e9, "attic"), (2.0e9, "garage"), (3.0e9, "attic")] {
+        let mut body = submission(download, "lan-1g");
+        body["location"] = serde_json::json!(loc);
+        let res = c
+            .post(format!("{base}/api/results"))
+            .json(&body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 201);
+    }
+
+    let attic: Vec<serde_json::Value> = c
+        .get(format!("{base}/api/history?location=attic"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(attic.len(), 2);
+    assert!(attic.iter().all(|r| r["location"] == "attic"));
+
+    // "No runs from there" is an answer, not a failure.
+    let res = c
+        .get(format!("{base}/api/history?location=cellar"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    let cellar: Vec<serde_json::Value> = res.json().await.unwrap();
+    assert!(cellar.is_empty());
+
+    // An empty parameter means no filter, the same as leaving it off.
+    let all: Vec<serde_json::Value> = c
+        .get(format!("{base}/api/history?location="))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(all.len(), 3);
+}
+
+#[tokio::test]
+async fn the_location_list_is_deduplicated_and_ordered_by_last_use() {
+    let history = Arc::new(History::in_memory().unwrap());
+    let base = serve(Some(history)).await;
+    let c = client();
+
+    // "attic" is used first and again last, so its *second* use is what
+    // places it: the list orders by when a tag was last chosen.
+    for loc in ["attic", "garage", "porch", "attic"] {
+        let mut body = submission(1.0e9, "lan-1g");
+        body["location"] = serde_json::json!(loc);
+        let res = c
+            .post(format!("{base}/api/results"))
+            .json(&body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 201);
+    }
+
+    let listed: Vec<String> = c
+        .get(format!("{base}/api/locations"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(listed, vec!["attic", "porch", "garage"]);
+}
+
+#[tokio::test]
+async fn with_history_disabled_the_location_list_is_empty_rather_than_broken() {
+    let base = serve(None).await;
+    let listed: Vec<String> = client()
+        .get(format!("{base}/api/locations"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(listed.is_empty());
+}
+
+#[tokio::test]
 async fn a_note_is_capped_in_characters_and_refused_for_a_missing_run() {
     let history = Arc::new(History::in_memory().unwrap());
     let base = serve(Some(history)).await;
@@ -1156,7 +1317,7 @@ async fn reading_the_history_is_not_affected_by_the_guard() {
         .as_i64()
         .unwrap();
 
-    for path in ["api/history", "api/clients", "api/status"] {
+    for path in ["api/history", "api/clients", "api/locations", "api/status"] {
         let res = c
             .get(format!("{base}/{path}"))
             .header("origin", "http://evil.example")

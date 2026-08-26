@@ -6,29 +6,64 @@ three-part X.Y.Z (bugfix +0.0.1, minor +0.1.0, major +1.0.0). On release,
 move the Unreleased entries into a new version section, bump `VERSION`,
 commit, then tag.
 
-## [Unreleased]
+## [1.8.0] - 2026-08-26
+
+Location tagging: every run can be tagged with where it was measured, and
+results can be filtered by location.
+
+### Added
+
+- **Location tags on runs.** Each measurement can be tagged with a free-text
+  location (e.g., "living room", "upstairs office") to answer the most useful
+  home-lab question: "is the network healthy *here*?" Tags are optional and
+  never attributed automatically — a run with no tag stays untagged, and a
+  previously used tag must be chosen or re-entered, never assumed from the last
+  run.
+
+  The UI shows a chip row below the run controls: "No location" first, then
+  the tags the server already knows about (most recently used first, up to
+  50), and an inline text field to add or reuse a tag — a near-match is
+  folded into the existing spelling rather than starting a second one. "No
+  location" is what a browser that has never chosen a room gets; it is not a
+  default that resets on every load. The choice persists in `localStorage`
+  and is pre-selected the next time the page opens, so a walk through the
+  house is a tap per room rather than a retype at every stop. Tags are
+  trimmed and capped at 64 characters; a whitespace-only entry is stored as
+  absent. The tag row is hidden entirely when history is disabled — tags have
+  nowhere to go without a database.
+
+- **GET `/api/locations`** returns a JSON array of distinct tags from all runs,
+  most recently used first, capped at 50 entries. Callers use this to populate
+  the tag picker.
+
+- **Location in the history database.** The `runs` table gains a nullable `TEXT
+  location` column (existing databases migrate at startup via idempotent
+  `ALTER TABLE` and set every existing run's location to `NULL`). Every `POST
+  /api/results` submission includes an optional `location` field; it is
+  accepted, trimmed, and stored. The run JSON served everywhere — on
+  `/api/history`, `/api/results/{id}`, and in the history UI — includes
+  `location` (null if unset).
+
+- **Location filtering on the history page.** `GET /api/history?location=X`
+  returns runs with an exact-match location tag (case-sensitive); the history
+  UI gains a location select that populates from `/api/locations`, server-side
+  filters the trend chart by the selected location, and a Location column shows
+  the tag on each history row. With no location selected, all runs appear.
+
+- **Location in the result footer.** A permalink to a stored run shows
+  `location: <tag>` in the footer alongside the client address and
+  measured-at timestamp, when the run was tagged. Omitted rather than shown
+  empty when it was not — most runs have no room, and a dash on every one of
+  them would say nothing.
 
 ### Changed
 
-- **The wiki is now the only home for the documentation.** `docs/wiki/` and
-  `scripts/publish-wiki.sh` are gone; pages are edited on the wiki itself
-  rather than in this repository and copied across. Every reference that
-  pointed into `docs/wiki/` - the README, and the comments in `config.rs`,
-  `routes.rs`, `speedtest.toml`, `api.ts` and `screenshots.mjs` - now points at
-  the wiki by URL, and the README screenshot is served from the wiki's own
-  asset host. Nothing that used to resolve stopped resolving.
-
-  The trade-off is real and worth stating: documentation can no longer be
-  reviewed in a pull request or changed in the same commit as the code it
-  describes. The engine contract in particular is meant to move together with
-  the tests that enforce it, and that now takes deliberate care rather than
-  falling out of the process.
-
-- **`screenshots.mjs` requires `SHOT_OUT`.** Its default wrote into
-  `docs/wiki/images`, which no longer exists. The images live in the wiki
-  repository now, so regenerating them means pointing the script at a clone of
-  it; the header says how. There is deliberately no default, because any
-  in-repo one would reintroduce what this change removed.
+- **Location is deliberately not a Prometheus label.** Tags have unbounded
+  cardinality and would explode the metric series count. The latest run per
+  client is still exported to `/metrics`, but location is not attached to it;
+  running a test tagged "kitchen" and then one tagged "bedroom" from the same
+  client replaces the previous series rather than creating a new one. Tests
+  confirm this design decision.
 
 ## [1.7.0] - 2026-08-26
 
@@ -91,6 +126,26 @@ snapshots, new metrics, and a guard against cross-origin mutation.
   deleted) and takes a snapshot if one is configured. With both retention
   windows at zero — the default — the pass is purely a reclamation and snapshot
   operation.
+
+- **The wiki is now the only home for the documentation.** `docs/wiki/` and
+  `scripts/publish-wiki.sh` are gone; pages are edited on the wiki itself
+  rather than in this repository and copied across. Every reference that
+  pointed into `docs/wiki/` - the README, and the comments in `config.rs`,
+  `routes.rs`, `speedtest.toml`, `api.ts` and `screenshots.mjs` - now points at
+  the wiki by URL, and the README screenshot is served from the wiki's own
+  asset host. Nothing that used to resolve stopped resolving.
+
+  The trade-off is real and worth stating: documentation can no longer be
+  reviewed in a pull request or changed in the same commit as the code it
+  describes. The engine contract in particular is meant to move together with
+  the tests that enforce it, and that now takes deliberate care rather than
+  falling out of the process.
+
+- **`screenshots.mjs` requires `SHOT_OUT`.** Its default wrote into
+  `docs/wiki/images`, which no longer exists. The images live in the wiki
+  repository now, so regenerating them means pointing the script at a clone of
+  it; the header says how. There is deliberately no default, because any
+  in-repo one would reintroduce what this change removed.
 
 ## [1.6.0] - 2026-08-26
 
@@ -849,7 +904,9 @@ milestone increments.
 - Tier-4 hardware validation outstanding; releases stay pre-release until it
   passes.
 
-[Unreleased]: https://github.com/sremich/lan-speedtest/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/sremich/lan-speedtest/compare/v1.8.0...HEAD
+[1.8.0]: https://github.com/sremich/lan-speedtest/releases/tag/v1.8.0
+[1.7.0]: https://github.com/sremich/lan-speedtest/releases/tag/v1.7.0
 [1.6.0]: https://github.com/sremich/lan-speedtest/releases/tag/v1.6.0
 [1.5.1]: https://github.com/sremich/lan-speedtest/releases/tag/v1.5.1
 [1.5.0]: https://github.com/sremich/lan-speedtest/releases/tag/v1.5.0

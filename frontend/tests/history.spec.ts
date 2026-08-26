@@ -11,8 +11,14 @@ const enabled = !!process.env.SPEEDTEST_E2E_HISTORY;
 
 test.skip(!enabled, 'needs a backend started with SPEEDTEST_HISTORY_DB set');
 
-async function completeARun(page: Page): Promise<void> {
-  await page.goto('/');
+/**
+ * Waits for the run already under way to finish and reach storage.
+ *
+ * Separate from `completeARun` because a run that has to be configured first —
+ * tagged with a location, say — is started by pressing the button rather than
+ * by loading the page.
+ */
+async function awaitStoredRun(page: Page): Promise<void> {
   await expect
     .poll(async () => page.locator('body').getAttribute('data-test-state'), { timeout: 100_000 })
     .not.toBe('running');
@@ -27,6 +33,11 @@ async function completeARun(page: Page): Promise<void> {
   await expect
     .poll(async () => page.locator('body').getAttribute('data-result-stored'), { timeout: 20_000 })
     .toBe('yes');
+}
+
+async function completeARun(page: Page): Promise<void> {
+  await page.goto('/');
+  await awaitStoredRun(page);
 }
 
 test('a finished run is offered a history link and is stored', async ({ page }) => {
@@ -300,6 +311,133 @@ test('a run can be given a description, from the history and the result page', a
   await expect(page.getByTestId('note')).toContainText('rewritten from the result page', {
     timeout: 20_000,
   });
+});
+
+test('a run can be tagged with a location, and the history filter narrows to it', async ({
+  page,
+  request,
+}) => {
+  // The tool is used by walking the house with a phone. A stack of runs that
+  // does not say which room each was taken in cannot answer the only question
+  // worth asking of it, so the room is chosen before the run rather than
+  // reconstructed from memory afterwards.
+  await page.goto('/?autostart=0');
+
+  await expect(page.getByTestId('places')).toBeVisible();
+  const chips = page.getByTestId('place-chips');
+
+  // Untagged is the default: a run is never quietly attributed to wherever the
+  // previous one happened to be taken.
+  await expect(chips.locator('.chip[aria-pressed="true"]')).toHaveText('No location');
+
+  // A field rather than a prompt — a modal dialog is a wall between you and
+  // the one thing you came to the page to do.
+  await page.getByTestId('place-add').click();
+  const input = page.getByTestId('place-input');
+  await expect(input).toBeFocused();
+  await input.fill('Office');
+  await input.press('Enter');
+
+  await expect(chips.locator('.chip[aria-pressed="true"]')).toHaveText('Office');
+  expect(
+    await page.evaluate(() => localStorage.getItem('speedtest.location')),
+    'the room should be remembered, so a walk is one tap per room',
+  ).toBe('Office');
+
+  await page.getByTestId('restart').click();
+  await expect(page.locator('body')).toHaveAttribute('data-test-state', 'running');
+  await awaitStoredRun(page);
+
+  // And one from nowhere in particular, so the filter below has something to
+  // exclude rather than only something to include.
+  await chips.locator('.chip[data-place=""]').click();
+  await page.getByTestId('restart').click();
+  await expect(page.locator('body')).toHaveAttribute('data-test-state', 'running');
+  await awaitStoredRun(page);
+
+  const runs = await (await request.get('/api/history')).json();
+  expect(runs.length).toBeGreaterThanOrEqual(2);
+  expect(runs[0].location, 'the run just taken was deliberately untagged').toBeNull();
+  expect(runs[1].location, 'the tag should have ridden along to storage').toBe('Office');
+
+  // The filter is applied by the backend, so watch for it going out: narrowing
+  // in the browser would leave the trend chart drawn from every run rather
+  // than from the ones being asked about.
+  const asked: string[] = [];
+  page.on('request', (req) => {
+    const url = new URL(req.url());
+    if (url.pathname === '/api/history') asked.push(url.searchParams.get('location') ?? '');
+  });
+
+  await page.goto('/history.html');
+  await expect
+    .poll(async () => page.locator('body').getAttribute('data-history-state'), { timeout: 20_000 })
+    .toBe('loaded');
+
+  // Every run wears its room, or an honest dash where it has none.
+  await expect(page.locator('#rows tr').first().getByTestId('row-location')).toHaveText('—');
+
+  const filter = page.getByTestId('location-filter');
+  await expect(filter, 'the filter appears once there is anything to filter by').toBeVisible();
+  await filter.selectOption('Office');
+
+  await expect
+    .poll(
+      async () => {
+        const rooms = await page.locator('#rows [data-testid="row-location"]').allTextContents();
+        return rooms.length > 0 && rooms.every((t) => t.trim() === 'Office');
+      },
+      { timeout: 20_000, message: 'the table should narrow to the tagged runs' },
+    )
+    .toBe(true);
+
+  expect(asked, 'the choice should reach the backend as ?location=').toContain('Office');
+  await expect(page.getByTestId('error')).toBeHidden();
+
+  // And the run's own page says where it was taken, next to the client and the
+  // profile — the page a shared link lands on.
+  await page.goto(`/result.html?id=${runs[1].id}`);
+  await expect
+    .poll(async () => page.locator('body').getAttribute('data-result-state'), { timeout: 20_000 })
+    .toBe('loaded');
+  await expect(page.getByTestId('result-location')).toHaveText('location: Office');
+});
+
+test('a location used before is offered again rather than retyped', async ({ page }) => {
+  // The list is built from the runs themselves, so the second walk through the
+  // house is a tap per room instead of a spelling exercise — and spelling is
+  // the whole risk here, because the filter matches exactly.
+  await page.goto('/?autostart=0');
+  await expect(page.getByTestId('places')).toBeVisible();
+
+  await page.getByTestId('place-add').click();
+  await page.getByTestId('place-input').fill('Garage');
+  await page.getByTestId('place-input').press('Enter');
+
+  await page.getByTestId('restart').click();
+  await expect(page.locator('body')).toHaveAttribute('data-test-state', 'running');
+  await awaitStoredRun(page);
+
+  await page.goto('/?autostart=0');
+  const chips = page.getByTestId('place-chips');
+  await expect(chips.locator('.chip', { hasText: 'Garage' })).toBeVisible();
+  // Still the chosen one: the choice is remembered, not merely offered.
+  await expect(chips.locator('.chip[aria-pressed="true"]')).toHaveText('Garage');
+
+  // A near-miss joins the room it belongs to rather than starting a second
+  // one. "garage" and "Garage" are one place to the person walking between
+  // them and two places to an exact-match filter, which would quietly split a
+  // room's history down the middle.
+  await chips.locator('.chip[data-place=""]').click();
+  await page.getByTestId('place-add').click();
+  await page.getByTestId('place-input').fill('garage');
+  await page.getByTestId('place-input').press('Enter');
+
+  await expect(chips.locator('.chip[aria-pressed="true"]')).toHaveText('Garage');
+  expect(
+    await chips.locator('.chip', { hasText: /garage/i }).count(),
+    'one room, one chip',
+  ).toBe(1);
 });
 
 test('a stored run says which build measured it', async ({ page, request }) => {

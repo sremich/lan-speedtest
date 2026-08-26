@@ -109,6 +109,47 @@
           </label>
         </div>
 
+        <!-- Where this run is being taken. Beside the start control and not
+             behind a menu, because the way this tool is used is walking the
+             house with a phone: tap the room, tap Retest, move on. Hidden on a
+             deployment that keeps no history, where a tag would go nowhere. -->
+        <div class="places" id="places" data-testid="places" hidden>
+          <span class="places__label" id="places-label">Location</span>
+          <div
+            class="places__chips"
+            id="place-chips"
+            data-testid="place-chips"
+            role="group"
+            aria-labelledby="places-label"
+          ></div>
+
+          <!-- A field rather than a prompt: a modal dialog is a wall between
+               you and the one thing you came to the page to do. -->
+          <form class="places__new" id="place-new" data-testid="place-new" hidden>
+            <input
+              class="places__input"
+              id="place-input"
+              data-testid="place-input"
+              type="text"
+              maxlength="64"
+              autocomplete="off"
+              autocapitalize="words"
+              enterkeyhint="done"
+              placeholder="Office, Kitchen…"
+              aria-label="Name this location"
+            />
+            <button class="btn btn--sm" type="submit" data-testid="place-save">Save</button>
+            <button
+              class="btn btn--sm"
+              id="place-cancel"
+              data-testid="place-cancel"
+              type="button"
+            >
+              Cancel
+            </button>
+          </form>
+        </div>
+
         <p class="note idle-note" id="idle-note" data-testid="idle-note" hidden></p>
 
         <!-- What is happening right now, directly above the strip it describes.

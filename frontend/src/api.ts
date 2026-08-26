@@ -159,6 +159,11 @@ export async function submitResult(payload: {
   profile: string;
   /** Every sample, so the stored run can be redrawn rather than summarised. */
   points: Record<string, unknown>;
+  /**
+   * Where the run was taken, if it was tagged. Omitted rather than sent empty:
+   * an untagged run has no location, which is not the same as a blank one.
+   */
+  location?: string;
 }): Promise<number | undefined> {
   try {
     const res = await fetch('/api/results', {
@@ -194,6 +199,11 @@ export interface StoredRunDetail {
   scores: Record<string, string>;
   /** A note written by hand after the run. */
   note: string | null;
+  /**
+   * Where the run was taken — the room, chosen before it started. `null` for
+   * an untagged run, and for every run stored before tagging existed.
+   */
+  location: string | null;
   /** The build that measured this run. `null` for runs stored before 1.5.0. */
   appVersion: string | null;
   summary: Record<string, number | undefined>;
@@ -202,6 +212,22 @@ export interface StoredRunDetail {
 
 export const fetchResult = (id: number): Promise<StoredRunDetail> =>
   getJson<StoredRunDetail>(`/api/results/${encodeURIComponent(String(id))}`);
+
+/**
+ * The locations runs have been tagged with, most recently used first.
+ *
+ * Best-effort, like the result POST: a deployment whose list cannot be read
+ * should still let you type a tag rather than losing the control altogether.
+ * The response is filtered rather than trusted — this drives innerHTML.
+ */
+export async function fetchLocations(): Promise<string[]> {
+  try {
+    const list = await getJson<unknown>('/api/locations');
+    return Array.isArray(list) ? list.filter((v): v is string => typeof v === 'string') : [];
+  } catch {
+    return [];
+  }
+}
 
 /**
  * Names a client, or clears the name when given an empty string.

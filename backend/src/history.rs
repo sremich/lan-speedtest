@@ -31,6 +31,22 @@ pub const MAX_SUMMARY_BYTES: usize = 512 * 1024;
 /// an improvement.
 const MAX_POINTS_BYTES: usize = 256 * 1024;
 
+/// The longest location tag kept.
+///
+/// Counted in characters like the note cap, so it does not depend on which
+/// alphabet someone writes in. Much shorter than a note on purpose: a location
+/// is a label runs are filtered and grouped by, and every fresh spelling of
+/// "upstairs landing, by the window, near the plant" is another entry in the
+/// picker that matches nothing else.
+pub const MAX_LOCATION_CHARS: usize = 64;
+
+/// How many distinct locations `/api/locations` will list.
+///
+/// The list feeds a picker, not a report — beyond this many tags the picker
+/// has already failed at its job, and the least recently used are the ones
+/// nobody is going to choose again.
+const MAX_LOCATIONS_LISTED: u32 = 50;
+
 /// The name a snapshot lands under, inside the configured directory.
 ///
 /// Fixed rather than timestamped, because this is a last-known-good copy and
@@ -125,6 +141,14 @@ pub struct ResultSubmission {
     /// interprets this.
     #[serde(default)]
     pub points: serde_json::Value,
+    /// Where the run was made, chosen by the person making it.
+    ///
+    /// Unlike the note this arrives *with* the run rather than after it,
+    /// because the moment you still remember which room you were standing in
+    /// is the moment the test finishes. Optional, trimmed, and capped at
+    /// [`MAX_LOCATION_CHARS`] on the way in.
+    #[serde(default)]
+    pub location: Option<String>,
 }
 
 /// The subset of the engine summary we give columns to.
@@ -193,6 +217,8 @@ pub struct StoredRun {
     pub scores: std::collections::BTreeMap<String, String>,
     /// A note written by hand after the fact. `None` when never set.
     pub note: Option<String>,
+    /// Where the run was made, if the person making it said. `None` otherwise.
+    pub location: Option<String>,
     /// The build that measured this run. `None` for runs stored before the
     /// version was recorded, whose latency may predate the `TCP_NODELAY` fix.
     pub app_version: Option<String>,
@@ -381,6 +407,13 @@ impl History {
                 [],
             )?;
         }
+        // Where the run was made. Nullable rather than defaulted to '',
+        // because absence is the common case and is what the API serves —
+        // every run stored before 1.8.0, and every run whose submitter said
+        // nothing, simply has no location.
+        if !existing.iter().any(|c| c == "location") {
+            conn.execute("ALTER TABLE runs ADD COLUMN location TEXT", [])?;
+        }
         Ok(())
     }
 
@@ -403,6 +436,8 @@ impl History {
             _ => "{}".to_string(),
         };
 
+        let location = normalized_location(submission.location.as_deref());
+
         let conn = self.conn.lock().expect("history mutex");
         conn.execute(
             "INSERT INTO runs (
@@ -410,8 +445,8 @@ impl History {
                  download, upload, latency, jitter,
                  down_loaded_latency, up_loaded_latency, packet_loss,
                  total_duration_ms, scores_json, summary_json, points_json,
-                 app_version
-             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
+                 app_version, location
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
             params![
                 recorded_at,
                 client_ip,
@@ -429,16 +464,22 @@ impl History {
                 summary_json,
                 points_json,
                 crate::VERSION,
+                location,
             ],
         )?;
         Ok(conn.last_insert_rowid())
     }
 
     /// Most recent runs first.
+    ///
+    /// The location filter is an exact match against the stored tag: the tags
+    /// come from `/api/locations` and are chosen, not typed, so a fuzzier
+    /// comparison would only blur which runs a chart is actually drawing.
     pub fn recent(
         &self,
         limit: u32,
         client_ip: Option<&str>,
+        location: Option<&str>,
     ) -> Result<Vec<StoredRun>, HistoryError> {
         let conn = self.conn.lock().expect("history mutex");
         let limit = limit.clamp(1, 1000);
@@ -447,16 +488,17 @@ impl History {
                           r.download, r.upload, r.latency, r.jitter,
                           r.down_loaded_latency, r.up_loaded_latency, r.packet_loss,
                           r.total_duration_ms, r.scores_json, n.name, r.note,
-                          r.app_version
+                          r.app_version, r.location
                    FROM runs r
                    LEFT JOIN client_names c ON c.client_ip = r.client_ip
                    LEFT JOIN resolved_names n ON n.client_ip = r.client_ip
                    WHERE (?1 IS NULL OR r.client_ip = ?1)
+                     AND (?3 IS NULL OR r.location = ?3)
                    ORDER BY r.recorded_at DESC, r.id DESC
                    LIMIT ?2";
 
         let mut stmt = conn.prepare(sql)?;
-        let rows = stmt.query_map(params![client_ip, limit], |row| {
+        let rows = stmt.query_map(params![client_ip, limit, location], |row| {
             let scores_json: String = row.get(14)?;
             Ok(StoredRun {
                 id: row.get(0)?,
@@ -477,6 +519,7 @@ impl History {
                 scores: serde_json::from_str(&scores_json).unwrap_or_default(),
                 note: non_empty(row.get::<_, Option<String>>(16)?),
                 app_version: non_empty(row.get::<_, Option<String>>(17)?),
+                location: non_empty(row.get::<_, Option<String>>(18)?),
             })
         })?;
 
@@ -518,13 +561,14 @@ impl History {
             "SELECT id, recorded_at, client_ip, client_name, hostname, user_agent, profile,
                     download, upload, latency, jitter,
                     down_loaded_latency, up_loaded_latency, packet_loss,
-                    total_duration_ms, scores_json, note, app_version
+                    total_duration_ms, scores_json, note, app_version, location
              FROM (
                SELECT r.id, r.recorded_at, r.client_ip, c.name AS client_name,
                       n.name AS hostname, r.user_agent, r.profile,
                       r.download, r.upload, r.latency, r.jitter,
                       r.down_loaded_latency, r.up_loaded_latency, r.packet_loss,
                       r.total_duration_ms, r.scores_json, r.note, r.app_version,
+                      r.location,
                       ROW_NUMBER() OVER (
                         PARTITION BY r.client_ip
                         ORDER BY r.recorded_at DESC, r.id DESC
@@ -557,8 +601,29 @@ impl History {
                 scores: serde_json::from_str(&scores_json).unwrap_or_default(),
                 note: non_empty(row.get::<_, Option<String>>(16)?),
                 app_version: non_empty(row.get::<_, Option<String>>(17)?),
+                location: non_empty(row.get::<_, Option<String>>(18)?),
             })
         })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Every location tag in use, most recently used first.
+    ///
+    /// Deduplicated and ordered by last use rather than alphabetically,
+    /// because this feeds the picker on the result form: the room you tested
+    /// from ten minutes ago is the likeliest answer now, and a tag last seen
+    /// in January has earned its place at the bottom. Capped so the picker
+    /// stays a picker — see [`MAX_LOCATIONS_LISTED`].
+    pub fn locations(&self) -> Result<Vec<String>, HistoryError> {
+        let conn = self.conn.lock().expect("history mutex");
+        let mut stmt = conn.prepare(
+            "SELECT location FROM runs
+             WHERE location IS NOT NULL AND location <> ''
+             GROUP BY location
+             ORDER BY MAX(recorded_at) DESC, MAX(id) DESC
+             LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![MAX_LOCATIONS_LISTED], |row| row.get(0))?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
@@ -785,7 +850,8 @@ impl History {
                         r.download, r.upload, r.latency, r.jitter,
                         r.down_loaded_latency, r.up_loaded_latency, r.packet_loss,
                         r.total_duration_ms, r.scores_json, n.name,
-                        r.summary_json, r.points_json, r.note, r.app_version
+                        r.summary_json, r.points_json, r.note, r.app_version,
+                        r.location
                  FROM runs r
                  LEFT JOIN client_names c ON c.client_ip = r.client_ip
                  LEFT JOIN resolved_names n ON n.client_ip = r.client_ip
@@ -815,6 +881,7 @@ impl History {
                             scores: serde_json::from_str(&scores_json).unwrap_or_default(),
                             note: non_empty(row.get::<_, Option<String>>(18)?),
                             app_version: non_empty(row.get::<_, Option<String>>(19)?),
+                            location: non_empty(row.get::<_, Option<String>>(20)?),
                         },
                         summary: serde_json::from_str(&summary_json).unwrap_or_default(),
                         points: serde_json::from_str(&points_json).unwrap_or_default(),
@@ -850,6 +917,18 @@ pub struct ClientSummary {
 /// `Some("")` is how a remembered miss is stored; it is not a name.
 fn non_empty(value: Option<String>) -> Option<String> {
     value.filter(|s| !s.trim().is_empty())
+}
+
+/// A location tag reduced to its storable form, or `None` when nothing
+/// survives.
+///
+/// Trimmed and cut at [`MAX_LOCATION_CHARS`] — characters, not bytes, so the
+/// cap means the same thing in every alphabet and can never split a code
+/// point. A tag that is nothing but whitespace becomes absence rather than an
+/// empty string, so the API has exactly one spelling of "no location".
+fn normalized_location(raw: Option<&str>) -> Option<String> {
+    let tag: String = raw?.trim().chars().take(MAX_LOCATION_CHARS).collect();
+    (!tag.is_empty()).then_some(tag)
 }
 
 /// Runs a statement to completion, discarding whatever it emits.
@@ -928,6 +1007,7 @@ mod tests {
             .collect(),
             profile: "lan-1g".into(),
             points: serde_json::json!({ "download": [{ "bps": download }] }),
+            location: None,
         }
     }
 
@@ -993,7 +1073,7 @@ mod tests {
         )
         .unwrap();
 
-        let runs = h.recent(10, None).unwrap();
+        let runs = h.recent(10, None, None).unwrap();
         assert_eq!(runs.len(), 1);
         let r = &runs[0];
         assert_eq!(r.client_ip, "10.0.0.11");
@@ -1029,17 +1109,17 @@ mod tests {
         )
         .unwrap();
 
-        let all = h.recent(50, None).unwrap();
+        let all = h.recent(50, None, None).unwrap();
         assert_eq!(all.len(), 3);
         // Newest first.
         assert_eq!(all[0].download, Some(3.0e9));
         assert_eq!(all[2].download, Some(1.0e9));
 
-        let first_client = h.recent(50, Some("10.0.0.11")).unwrap();
+        let first_client = h.recent(50, Some("10.0.0.11"), None).unwrap();
         assert_eq!(first_client.len(), 2);
         assert!(first_client.iter().all(|r| r.client_ip == "10.0.0.11"));
 
-        let second_client = h.recent(50, Some("10.0.0.12")).unwrap();
+        let second_client = h.recent(50, Some("10.0.0.12"), None).unwrap();
         assert_eq!(second_client.len(), 1);
         assert_eq!(second_client[0].user_agent, "Firefox");
 
@@ -1059,6 +1139,7 @@ mod tests {
             scores: Default::default(),
             profile: "quick".into(),
             points: serde_json::Value::Null,
+            location: None,
         };
         assert!(matches!(
             h.record(&empty, "10.0.0.1", "ua", "2026-08-24T10:00:00Z"),
@@ -1079,11 +1160,12 @@ mod tests {
             scores: Default::default(),
             profile: "quick".into(),
             points: serde_json::Value::Null,
+            location: None,
         };
         h.record(&partial, "10.0.0.1", "ua", "2026-08-24T10:00:00Z")
             .unwrap();
         assert_eq!(h.count().unwrap(), 1);
-        assert_eq!(h.recent(1, None).unwrap()[0].upload, None);
+        assert_eq!(h.recent(1, None, None).unwrap()[0].upload, None);
     }
 
     #[test]
@@ -1096,11 +1178,11 @@ mod tests {
             "2026-08-24T10:00:00Z",
         )
         .unwrap();
-        assert_eq!(h.recent(1, None).unwrap()[0].client_name, None);
+        assert_eq!(h.recent(1, None, None).unwrap()[0].client_name, None);
 
         h.set_client_name("10.0.0.11", "workshop-desktop").unwrap();
         assert_eq!(
-            h.recent(1, None).unwrap()[0].client_name.as_deref(),
+            h.recent(1, None, None).unwrap()[0].client_name.as_deref(),
             Some("workshop-desktop")
         );
 
@@ -1124,10 +1206,10 @@ mod tests {
             )
             .unwrap();
         }
-        assert_eq!(h.recent(2, None).unwrap().len(), 2);
+        assert_eq!(h.recent(2, None, None).unwrap().len(), 2);
         // Zero would otherwise return nothing at all, which reads as "no data".
-        assert_eq!(h.recent(0, None).unwrap().len(), 1);
-        assert_eq!(h.recent(u32::MAX, None).unwrap().len(), 5);
+        assert_eq!(h.recent(0, None, None).unwrap().len(), 1);
+        assert_eq!(h.recent(u32::MAX, None, None).unwrap().len(), 5);
     }
 
     #[test]
@@ -1187,7 +1269,7 @@ mod tests {
         let h = History::open(&path).unwrap();
         assert_eq!(h.count().unwrap(), 1, "the existing row must survive");
 
-        let old = &h.recent(10, None).unwrap()[0];
+        let old = &h.recent(10, None, None).unwrap()[0];
         assert_eq!(
             old.app_version, None,
             "a run from before the column existed has no version to claim"
@@ -1195,8 +1277,189 @@ mod tests {
 
         h.record(&submission(1.0e9), "10.0.0.2", "ua", "2026-08-26T10:00:00Z")
             .unwrap();
-        let new = &h.recent(10, None).unwrap()[0];
+        let new = &h.recent(10, None, None).unwrap()[0];
         assert_eq!(new.app_version.as_deref(), Some(crate::VERSION));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_run_recorded_with_a_location_round_trips_it() {
+        let h = history();
+        let mut s = submission(9.4e8);
+        s.location = Some("  study desk  ".into());
+        let id = h
+            .record(&s, "10.0.0.11", "ua", "2026-08-24T10:00:00Z")
+            .unwrap();
+
+        // Trimmed on the way in, and visible both in the list and on the
+        // permalink, which read through different queries.
+        let runs = h.recent(10, None, None).unwrap();
+        assert_eq!(runs[0].location.as_deref(), Some("study desk"));
+        let one = h.by_id(id).unwrap().unwrap();
+        assert_eq!(one.run.location.as_deref(), Some("study desk"));
+    }
+
+    #[test]
+    fn a_whitespace_only_location_is_stored_as_absence() {
+        // The API has one spelling of "no location", and it is `null` — not
+        // an empty string, not three spaces. The front end gets exactly one
+        // thing to test for.
+        let h = history();
+        let mut s = submission(9.4e8);
+        s.location = Some("   \t  ".into());
+        h.record(&s, "10.0.0.1", "ua", "2026-08-24T10:00:00Z")
+            .unwrap();
+
+        assert_eq!(h.recent(1, None, None).unwrap()[0].location, None);
+        assert!(
+            h.locations().unwrap().is_empty(),
+            "a blank tag must not appear in the picker either"
+        );
+    }
+
+    #[test]
+    fn an_overlong_location_is_cut_at_sixty_four_characters_not_bytes() {
+        // Multi-byte on purpose, like the note cap's test: a byte cap would
+        // cut this far shorter than intended and could split a code point.
+        let h = history();
+        let mut s = submission(9.4e8);
+        s.location = Some("é".repeat(100));
+        h.record(&s, "10.0.0.1", "ua", "2026-08-24T10:00:00Z")
+            .unwrap();
+
+        let stored = h.recent(1, None, None).unwrap()[0]
+            .location
+            .clone()
+            .unwrap();
+        assert_eq!(stored.chars().count(), MAX_LOCATION_CHARS);
+        assert!(stored.chars().all(|ch| ch == 'é'), "a character was split");
+    }
+
+    #[test]
+    fn filtering_by_location_returns_only_the_runs_tagged_with_it() {
+        let h = history();
+        for (i, loc) in [Some("attic"), Some("garage"), None, Some("attic")]
+            .iter()
+            .enumerate()
+        {
+            let mut s = submission(1.0e9);
+            s.location = loc.map(str::to_string);
+            h.record(&s, "10.0.0.1", "ua", &format!("2026-08-24T10:0{i}:00Z"))
+                .unwrap();
+        }
+
+        let attic = h.recent(50, None, Some("attic")).unwrap();
+        assert_eq!(attic.len(), 2);
+        assert!(attic.iter().all(|r| r.location.as_deref() == Some("attic")));
+
+        // A location nothing was tagged with is an empty list, not an error:
+        // "no runs from there" is an answer, not a failure.
+        assert!(h.recent(50, None, Some("cellar")).unwrap().is_empty());
+
+        // And the filter composes with the client filter rather than
+        // replacing it.
+        assert_eq!(
+            h.recent(50, Some("10.0.0.1"), Some("garage"))
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn locations_are_listed_by_most_recent_use_and_deduplicated() {
+        let h = history();
+        for (i, loc) in ["attic", "garage", "attic", "porch"].iter().enumerate() {
+            let mut s = submission(1.0e9);
+            s.location = Some((*loc).to_string());
+            h.record(&s, "10.0.0.1", "ua", &format!("2026-08-24T10:0{i}:00Z"))
+                .unwrap();
+        }
+
+        // "attic" was used twice; its second use is what places it, so the
+        // order is by when a tag was last chosen, not first invented.
+        assert_eq!(h.locations().unwrap(), vec!["porch", "attic", "garage"]);
+    }
+
+    #[test]
+    fn the_location_list_is_capped_so_the_picker_stays_a_picker() {
+        let h = history();
+        for i in 0..(MAX_LOCATIONS_LISTED + 5) {
+            let mut s = submission(1.0e9);
+            s.location = Some(format!("spot-{i:03}"));
+            h.record(
+                &s,
+                "10.0.0.1",
+                "ua",
+                &format!("2026-08-24T{:02}:{:02}:00Z", i / 60, i % 60),
+            )
+            .unwrap();
+        }
+
+        let listed = h.locations().unwrap();
+        assert_eq!(listed.len(), MAX_LOCATIONS_LISTED as usize);
+        // The ones that fall off are the least recently used.
+        assert_eq!(listed[0], format!("spot-{:03}", MAX_LOCATIONS_LISTED + 4));
+        assert!(!listed.contains(&"spot-000".to_string()));
+    }
+
+    #[test]
+    fn a_database_predating_the_location_column_gains_it_and_keeps_its_rows() {
+        // The 1.7.0 shape: every column up to and including `app_version`,
+        // and no `location`. The rows already on disk were made before anyone
+        // could say where from, and the migration must present that as
+        // absence rather than as an empty tag.
+        let dir = temp_dir("migrate-location");
+        let path = dir.join("history.db");
+
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE runs (
+                     id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                     recorded_at TEXT NOT NULL,
+                     client_ip   TEXT NOT NULL,
+                     user_agent  TEXT NOT NULL DEFAULT '',
+                     profile     TEXT NOT NULL DEFAULT '',
+                     download    REAL, upload REAL, latency REAL, jitter REAL,
+                     down_loaded_latency REAL, up_loaded_latency REAL,
+                     packet_loss REAL, total_duration_ms REAL,
+                     scores_json  TEXT NOT NULL DEFAULT '{}',
+                     summary_json TEXT NOT NULL DEFAULT '{}',
+                     points_json  TEXT NOT NULL DEFAULT '{}',
+                     note         TEXT NOT NULL DEFAULT '',
+                     app_version  TEXT NOT NULL DEFAULT ''
+                 );
+                 INSERT INTO runs (recorded_at, client_ip, download, app_version)
+                 VALUES ('2026-08-24T10:00:00Z', '10.0.0.1', 9.4e8, '1.7.0');",
+            )
+            .unwrap();
+        }
+
+        let h = History::open(&path).unwrap();
+        assert_eq!(h.count().unwrap(), 1, "the existing row must survive");
+
+        let old = &h.recent(10, None, None).unwrap()[0];
+        assert_eq!(old.location, None);
+        assert_eq!(
+            old.app_version.as_deref(),
+            Some("1.7.0"),
+            "and the columns it already had are untouched"
+        );
+
+        // A run recorded after the upgrade carries its tag.
+        let mut s = submission(1.0e9);
+        s.location = Some("attic".into());
+        h.record(&s, "10.0.0.2", "ua", "2026-08-26T10:00:00Z")
+            .unwrap();
+        assert_eq!(h.locations().unwrap(), vec!["attic"]);
+        drop(h);
+
+        // Idempotent: a second open finds the column already there and must
+        // not fail trying to add it again.
+        let h = History::open(&path).unwrap();
+        assert_eq!(h.count().unwrap(), 2);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1268,7 +1531,7 @@ mod tests {
         let h = History::open(&path).unwrap();
         assert_eq!(mode(&h), AUTO_VACUUM_INCREMENTAL);
         assert_eq!(h.count().unwrap(), 1, "the VACUUM must not lose the row");
-        assert_eq!(h.recent(1, None).unwrap()[0].download, Some(9.4e8));
+        assert_eq!(h.recent(1, None, None).unwrap()[0].download, Some(9.4e8));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

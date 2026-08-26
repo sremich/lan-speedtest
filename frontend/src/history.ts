@@ -8,7 +8,7 @@
 
 import './styles.css';
 import { setUpThemeToggle } from './theme';
-import { fetchStatus, setClientName, setRunNote } from './api';
+import { fetchLocations, fetchStatus, setClientName, setRunNote } from './api';
 import { formatBandwidth, formatLatency, formatPacketLoss, latencyPredatesNagleFix } from './format';
 
 interface StoredRun {
@@ -31,6 +31,8 @@ interface StoredRun {
   scores: Record<string, string>;
   /** A note written by hand after the run. */
   note: string | null;
+  /** The room the run was taken in, chosen before it started. */
+  location: string | null;
   /** The build that measured this run. `null` for runs stored before 1.5.0. */
   appVersion: string | null;
 }
@@ -64,6 +66,7 @@ const ui = {
   chart: el('chart'),
   rows: el('rows'),
   clientFilter: el<HTMLSelectElement>('client-filter'),
+  locationFilter: el<HTMLSelectElement>('location-filter'),
   rename: el<HTMLButtonElement>('rename'),
   empty: el('empty'),
   error: el('error'),
@@ -273,6 +276,9 @@ ${r.userAgent}`;
         </td>
         <td>${esc(formatWhen(r.recordedAt))}</td>
         <td class="cell--client" title="${esc(detail)}">${esc(who)}</td>
+        <td class="cell--place" data-testid="row-location">${
+          r.location ? esc(r.location) : '<span class="desc--empty">—</span>'
+        }</td>
         <td class="cell--num" data-testid="row-download">${down.value}<span class="cell--unit"> ${down.unit}</span></td>
         <td class="cell--num">${up.value}<span class="cell--unit"> ${up.unit}</span></td>
         <td class="cell--num">${lat(r.latency)}</td>
@@ -306,6 +312,11 @@ async function load(): Promise<void> {
   const params = new URLSearchParams({ limit: '200' });
   if (filter !== 'all') params.set('client', filter);
 
+  // Filtered server-side rather than here, so the trend chart above the table
+  // is drawn from the runs being asked about rather than from all of them.
+  const place = ui.locationFilter.value || 'all';
+  if (place !== 'all') params.set('location', place);
+
   const res = await fetch(`/api/history?${params}`, { cache: 'no-store' });
   if (!res.ok) throw new Error(`/api/history responded ${res.status}`);
   const runs = (await res.json()) as StoredRun[];
@@ -333,6 +344,29 @@ async function loadClients(): Promise<void> {
     .join('');
   ui.clientFilter.innerHTML = options;
   updateRenameControl();
+}
+
+/**
+ * Populates the location filter, and shows it only if there is anything to
+ * filter by.
+ *
+ * A deployment whose runs are all untagged would otherwise get a control with
+ * exactly one option, which can only be set back to where it already is.
+ */
+async function loadLocations(): Promise<void> {
+  const locations = await fetchLocations();
+  if (locations.length === 0) {
+    ui.locationFilter.hidden = true;
+    return;
+  }
+
+  const chosen = ui.locationFilter.value || 'all';
+  ui.locationFilter.innerHTML = ['<option value="all">All locations</option>']
+    .concat(locations.map((l) => `<option value="${esc(l)}">${esc(l)}</option>`))
+    .join('');
+  // A filter that was in force before a reload should survive one.
+  ui.locationFilter.value = locations.includes(chosen) ? chosen : 'all';
+  ui.locationFilter.hidden = false;
 }
 
 /**
@@ -411,6 +445,10 @@ ui.clientFilter.addEventListener('change', () => {
   void load().catch(showError);
 });
 
+ui.locationFilter.addEventListener('change', () => {
+  void load().catch(showError);
+});
+
 /**
  * Redraw on resize.
  *
@@ -453,6 +491,7 @@ void (async () => {
   void applySiteName();
   try {
     await loadClients();
+    await loadLocations();
     await load();
   } catch (e) {
     showError(e);
