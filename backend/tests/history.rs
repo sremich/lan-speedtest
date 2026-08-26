@@ -866,7 +866,11 @@ async fn metrics_is_absent_unless_it_is_turned_on() {
         .await
         .unwrap();
 
-    let res = client().get(format!("{base}/metrics")).send().await.unwrap();
+    let res = client()
+        .get(format!("{base}/metrics"))
+        .send()
+        .await
+        .unwrap();
     assert_ne!(
         res.status(),
         200,
@@ -899,7 +903,11 @@ measurements = [ { type = 'download', bytes = 1000, count = 1 } ]
         assert_eq!(res.status(), 201);
     }
 
-    let res = client().get(format!("{base}/metrics")).send().await.unwrap();
+    let res = client()
+        .get(format!("{base}/metrics"))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(res.status(), 200);
     assert!(res
         .headers()
