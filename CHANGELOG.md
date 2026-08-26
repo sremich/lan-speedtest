@@ -6,6 +6,96 @@ three-part X.Y.Z (bugfix +0.0.1, minor +0.1.0, major +1.0.0). On release,
 move the Unreleased entries into a new version section, bump `VERSION`,
 commit, then tag.
 
+## [1.5.0] - 2026-08-26
+
+What measured it, whether to measure at all, and what changed.
+
+### Added
+
+- **Auto-start can be turned off.** A run moves hundreds of megabytes, and
+  opening the page to read the history or change a setting should not do that
+  behind your back — least of all during the video call that made you suspect
+  the network. On by default, so nothing changes unless you ask: a per-browser
+  toggle beside Retest, `?autostart=0` for one visit, and `server.autostart`
+  (or `SPEEDTEST_AUTOSTART`) for the deployment's default. The URL override is
+  deliberately not remembered — a link someone sends you should not silently
+  reconfigure your browser.
+
+- **A compare page**, `/compare.html?a=N&b=M`. Pick two runs in the history and
+  it computes the difference rather than leaving you to eye two columns of
+  formatted numbers. Signed by *improvement* rather than by arithmetic: more
+  bandwidth and less latency are both good, and a table that coloured them the
+  same way would be worse than one with no colour at all. A change under 2% is
+  reported as no change, because two runs of the same link differ by that much
+  every time.
+
+  If either run predates 1.3.1, the latency rows are marked and explained —
+  their difference is mostly our own `TCP_NODELAY` fix, not the network.
+
+- **`/metrics`**, in Prometheus text format, off unless `server.metrics` is
+  set: the body names every client that has run a test, which is more than an
+  unauthenticated endpoint should offer by default. Exports the most recent run
+  per client in base units (seconds, ratios), and **omits** a figure that was
+  never measured rather than exporting it as zero — no packet-loss stage and 0%
+  packet loss are different claims.
+
+- **Retention**, `retain_runs_days` and `retain_samples_days`, both off by
+  default. Two windows because the costs differ by orders of magnitude: a
+  summary row is a couple of hundred bytes and is what a trend is made of; the
+  sample blob behind it can be a quarter of a megabyte and stops being
+  interesting long before the run does. Samples can therefore be released while
+  the run is kept.
+
+- **A `lan-2.5g` profile.** The widest gap in the shipped set: 2.5 GbE is now
+  the default uplink on Wi-Fi 7 access points and current motherboards, and a
+  2.5G client running `lan-1g` finishes each transfer too fast for loaded
+  latency to be measurable.
+
+- **A light theme**, with a toggle on every page. Three states, not two: an
+  explicit choice is remembered and wins, and no choice follows the operating
+  system — including while the page is open, so a laptop that switches at
+  sunset takes the page with it.
+
+- **A web manifest and icon**, so the page can be added to a phone's home
+  screen — which is where it is most useful, walking around looking for the
+  dead spot.
+
+- **Every run records the build that measured it.** A stored figure is only
+  interpretable if you know what produced it: everything recorded before 1.3.1
+  carries up to 40 ms of our own `TCP_NODELAY` stall in its latency, and until
+  now nothing distinguished those rows from correct ones. New runs carry their
+  version; a run whose version is missing or below 1.3.1 is marked in the
+  history table and on its own page, with what the caveat actually is.
+
+  The recorded number is never adjusted — it is what was measured. Only latency
+  is flagged, because the bug delayed small responses and never touched bulk
+  transfers, which is why it survived three releases with throughput looking
+  right.
+
+### Changed
+
+- **Changing the profile clears the result instead of starting a new run.** It
+  re-ran immediately so that yesterday's figures never sat under today's
+  profile name — a real concern, and clearing solves it too. On `lan-10g` a
+  brushed dropdown was several gigabytes down the wire before you could react.
+
+- **Latency is shown to two decimals.** One was enough when a LAN round trip
+  read tens of milliseconds; since 1.3.1 it reads about 0.6 ms, where a tenth
+  is a sixth of the figure. The detail-view distributions already used two, so
+  the headline was the coarser number sitting above the finer ones.
+
+### Fixed
+
+- **`x-forwarded-for` was read from the first header line only.** The header is
+  legally repeatable and proxies differ — some extend one comma-joined list,
+  others append a line per hop. Since the client is found by walking the chain
+  from the right past the trusted proxies, dropping the tail meant believing
+  the wrong end of it. All lines are now joined before parsing.
+
+- **The history index did not match the query's sort order.** It covered
+  `recorded_at` while `recent` orders by `recorded_at DESC, id DESC`, leaving
+  SQLite to sort the ties in memory.
+
 ## [1.4.0] - 2026-08-25
 
 The run, described and explained.
@@ -607,7 +697,8 @@ milestone increments.
 - Tier-4 hardware validation outstanding; releases stay pre-release until it
   passes.
 
-[Unreleased]: https://github.com/sremich/self-hosted-cloudflare-speedtest/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/sremich/self-hosted-cloudflare-speedtest/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v1.5.0
 [1.4.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v1.4.0
 [1.3.1]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v1.3.1
 [1.3.0]: https://github.com/sremich/self-hosted-cloudflare-speedtest/releases/tag/v1.3.0

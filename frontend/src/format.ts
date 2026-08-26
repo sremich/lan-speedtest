@@ -22,10 +22,51 @@ export function formatBandwidth(bps: number | undefined): { value: string; unit:
   return { value: bps.toFixed(0), unit: 'bps' };
 }
 
+/**
+ * Latency, to two decimals.
+ *
+ * One decimal was enough when a LAN round trip read tens of milliseconds. Since
+ * 1.3.1 removed the Nagle stall it reads about 0.6 ms, where a tenth of a
+ * millisecond is a sixth of the whole figure — and the distributions in the
+ * detail view have always shown two decimals, so the headline was the odd one
+ * out and looked less precise than the numbers underneath it.
+ */
 export function formatLatency(ms: number | undefined | null): string {
   if (ms === undefined || ms === null || !Number.isFinite(ms)) return PENDING;
-  if (ms < 0.05) return '<0.1 ms';
-  return `${ms.toFixed(1)} ms`;
+  if (ms < 0.005) return '<0.01 ms';
+  return `${ms.toFixed(2)} ms`;
+}
+
+/**
+ * A three-part version as one comparable number, or `null` if it is not one.
+ *
+ * Compared numerically rather than as text, because "1.10.0" sorts before
+ * "1.3.1" alphabetically and comes after it in fact. The bases cap minor and
+ * patch at 999, which this project will not reach.
+ */
+function versionKey(text: string): number | null {
+  const parts = /^(\d+)\.(\d+)\.(\d+)$/.exec(text);
+  if (!parts) return null;
+  const [, major = '0', minor = '0', patch = '0'] = parts;
+  return Number(major) * 1_000_000 + Number(minor) * 1_000 + Number(patch);
+}
+
+/** The release that stopped `TCP_NODELAY` inflating every latency reading. */
+const NAGLE_FIX = versionKey('1.3.1') ?? 0;
+
+/**
+ * Whether a run's latency figures predate the `TCP_NODELAY` fix.
+ *
+ * Runs recorded before 1.3.1 have their latency inflated by up to 40 ms, which
+ * makes them incomparable with anything measured since. A run with no recorded
+ * version was stored before the version was tracked at all, which is a weaker
+ * claim than a version — it is treated as suspect because it might be, and
+ * saying so is the honest reading.
+ */
+export function latencyPredatesNagleFix(appVersion: string | null | undefined): boolean {
+  if (!appVersion) return true;
+  const key = versionKey(appVersion);
+  return key === null || key < NAGLE_FIX;
 }
 
 export function formatPacketLoss(ratio: number | undefined): string {

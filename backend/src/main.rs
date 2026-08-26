@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::serve::ListenerExt;
 use tracing_subscriber::EnvFilter;
@@ -79,6 +80,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         Some(Arc::new(db))
     };
+
+    // Retention, if it was asked for. Runs once at startup and then daily —
+    // a long-lived homelab service is restarted rarely enough that
+    // startup-only would let a database grow for months between prunes.
+    if let Some(db) = history.clone() {
+        let runs_days = config.server.retain_runs_days;
+        let samples_days = config.server.retain_samples_days;
+        if runs_days > 0 || samples_days > 0 {
+            spawn_retention(db, runs_days, samples_days);
+        }
+    }
 
     let state = AppState::new(config, payload, history);
     let app = routes::router(state);
@@ -171,4 +183,56 @@ async fn shutdown_signal() {
         _ = terminate => {}
     }
     tracing::info!("shutting down");
+}
+
+/// Prunes now, and once a day thereafter.
+///
+/// The cutoffs are recomputed on every pass rather than once at startup: a
+/// window computed at boot would stop moving, so a service left running for a
+/// month would quietly stop pruning anything.
+fn spawn_retention(db: Arc<History>, runs_days: u32, samples_days: u32) {
+    tracing::info!(
+        "retention: runs {} days, samples {} days (0 = keep)",
+        runs_days,
+        samples_days
+    );
+
+    tokio::spawn(async move {
+        const DAY: Duration = Duration::from_secs(24 * 60 * 60);
+        loop {
+            let cutoff = |days: u32| {
+                if days == 0 {
+                    return None;
+                }
+                let at = time::OffsetDateTime::now_utc() - time::Duration::days(i64::from(days));
+                at.format(&time::format_description::well_known::Rfc3339)
+                    .ok()
+            };
+
+            let runs_cutoff = cutoff(runs_days);
+            let samples_cutoff = cutoff(samples_days);
+
+            // Blocking work on a blocking thread: rusqlite is synchronous, and
+            // a DELETE over a large table would otherwise stall the runtime
+            // that is meant to be serving a measurement at the time.
+            let db = db.clone();
+            let pruned = tokio::task::spawn_blocking(move || {
+                db.prune(runs_cutoff.as_deref(), samples_cutoff.as_deref())
+            })
+            .await;
+
+            match pruned {
+                Ok(Ok(p)) if p.runs_deleted > 0 || p.samples_cleared > 0 => tracing::info!(
+                    "retention: deleted {} run(s), released samples from {}",
+                    p.runs_deleted,
+                    p.samples_cleared
+                ),
+                Ok(Ok(_)) => tracing::debug!("retention: nothing to prune"),
+                Ok(Err(e)) => tracing::warn!("retention pass failed: {e}"),
+                Err(e) => tracing::warn!("retention task panicked: {e}"),
+            }
+
+            tokio::time::sleep(DAY).await;
+        }
+    });
 }

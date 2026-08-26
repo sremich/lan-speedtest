@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0d1117" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/icon.svg" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Compare — LAN Speed Test</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>&#9889;</text></svg>" />
+    <script>
+      // Before first paint, so a reader who chose light does not get a flash of
+      // the dark palette on every navigation. Inline and tiny for that reason:
+      // a module script would run after the page has already been painted.
+      try {
+        var t = localStorage.getItem('speedtest.theme');
+        if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+      } catch (e) {}
+    </script>
+  </head>
+  <body>
+    <main class="page">
+      <header class="page__head">
+        <h1 class="page__title" id="page-title" data-testid="compare-title">Compare</h1>
+        <div class="page__actions">
+          <button class="theme-toggle" id="theme-toggle" data-testid="theme-toggle" type="button">Light</button>
+          <a class="btn" href="/history.html" data-testid="history-link">History</a>
+          <a class="btn" href="/" data-testid="new-test">New test</a>
+        </div>
+      </header>
+
+      <p class="error" id="error" data-testid="error" hidden></p>
+
+      <!-- Which two runs these are. Named by description where one was
+           written, because "the one from the garage" is what you actually
+           remember, and by client and time otherwise. -->
+      <section class="cmp__heads" aria-label="The runs being compared">
+        <article class="cmp__head" id="head-a" data-testid="head-a"></article>
+        <article class="cmp__head" id="head-b" data-testid="head-b"></article>
+      </section>
+
+      <section class="cmp" aria-label="Comparison">
+        <table class="cmp__table" id="table" data-testid="compare-table">
+          <thead>
+            <tr>
+              <th scope="col">Measurement</th>
+              <th scope="col" class="cell--num">A</th>
+              <th scope="col" class="cell--num">B</th>
+              <th scope="col" class="cell--num">Change</th>
+            </tr>
+          </thead>
+          <tbody id="rows" data-testid="compare-rows"></tbody>
+        </table>
+      </section>
+
+      <!-- Both runs' traces, at the same scale, so the shapes are comparable
+           by eye and not just by the numbers above. -->
+      <section class="cmp__traces" aria-label="Traces">
+        <article class="band__cell trace">
+          <h2 class="trace__label">Download — A</h2>
+          <div class="trace__chart" id="down-a" data-testid="down-a"></div>
+        </article>
+        <article class="band__cell trace">
+          <h2 class="trace__label">Download — B</h2>
+          <div class="trace__chart" id="down-b" data-testid="down-b"></div>
+        </article>
+        <article class="band__cell trace">
+          <h2 class="trace__label">Upload — A</h2>
+          <div class="trace__chart" id="up-a" data-testid="up-a"></div>
+        </article>
+        <article class="band__cell trace">
+          <h2 class="trace__label">Upload — B</h2>
+          <div class="trace__chart" id="up-b" data-testid="up-b"></div>
+        </article>
+      </section>
+
+      <footer class="page__foot">
+        <span id="caveat" data-testid="caveat"></span>
+      </footer>
+    </main>
+
+    <script type="module" src="/src/compare.ts"></script>
+  </body>
+</html>

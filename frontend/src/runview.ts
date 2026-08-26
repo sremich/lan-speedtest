@@ -42,6 +42,42 @@ export const EMPTY_SAMPLES: RunSamples = {
   upLoadedLatency: [],
 };
 
+/**
+ * Reads the sample blob a run was stored with.
+ *
+ * Written by whatever version of the front end recorded the run, so nothing
+ * here assumes a field is present: a run stored before 1.3.0 has no samples at
+ * all and should still render its headline rather than an error. Lives here
+ * rather than on a page, because every page that draws a stored run needs it
+ * and three copies would drift.
+ */
+export function samplesFromStored(blob: unknown, packetLoss: number | null): RunSamples {
+  const raw = (blob ?? {}) as Record<string, unknown>;
+
+  const points = (key: string): Sample[] => {
+    const value = raw[key];
+    if (!Array.isArray(value)) return [];
+    return value.filter(
+      (p): p is Sample =>
+        typeof p === 'object' && p !== null && typeof (p as Sample).bps === 'number',
+    );
+  };
+
+  const numbers = (key: string): number[] => {
+    const value = raw[key];
+    return Array.isArray(value) ? value.filter((n): n is number => typeof n === 'number') : [];
+  };
+
+  return {
+    download: points('download'),
+    upload: points('upload'),
+    idleLatency: numbers('idleLatency'),
+    downLoadedLatency: numbers('downLoadedLatency'),
+    upLoadedLatency: numbers('upLoadedLatency'),
+    ...(packetLoss !== null ? { packetLoss } : {}),
+  };
+}
+
 export type TraceKey = 'download' | 'upload';
 
 /**

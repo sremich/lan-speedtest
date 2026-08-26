@@ -30,6 +30,13 @@ export interface Status {
   clientKind: string;
   clientKindLabel: string;
   serverProfileDescription: string;
+  /**
+   * Whether this deployment measures as soon as the page loads.
+   *
+   * The server's default for a first visit. A browser that has chosen
+   * otherwise keeps its own answer.
+   */
+  autostart: boolean;
 }
 
 export interface EngineConfig {
@@ -187,6 +194,8 @@ export interface StoredRunDetail {
   scores: Record<string, string>;
   /** A note written by hand after the run. */
   note: string | null;
+  /** The build that measured this run. `null` for runs stored before 1.5.0. */
+  appVersion: string | null;
   summary: Record<string, number | undefined>;
   points: Record<string, unknown>;
 }

@@ -167,7 +167,12 @@ pub fn router(state: AppState) -> Router {
     // SPA-style fallback so a deep link still resolves to the app shell.
     let statics = ServeDir::new(&static_dir).fallback(ServeFile::new(&index));
 
-    Router::new()
+    // Only mounted when asked for: the body names every client that has run a
+    // test, which is more than an unauthenticated endpoint should offer by
+    // default. Absent rather than 403 when off — there is nothing there.
+    let metrics_route = state.config.server.metrics;
+
+    let mut router = Router::new()
         .route("/__down", get(down))
         .route("/__up", post(up))
         .route("/api/status", get(status))
@@ -179,10 +184,36 @@ pub fn router(state: AppState) -> Router {
         .route("/api/results/{id}/note", post(set_note))
         .route("/api/history", get(list_history))
         .route("/api/clients", get(list_clients))
-        .route("/api/clients/{ip}/name", post(set_client_name))
-        .fallback_service(statics)
-        .with_state(state)
+        .route("/api/clients/{ip}/name", post(set_client_name));
+
+    if metrics_route {
+        router = router.route("/metrics", get(metrics));
+    }
+
+    router.fallback_service(statics).with_state(state)
 }
+
+/// Prometheus exposition of the most recent run per client.
+async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
+    let Some(history) = state.history.as_ref() else {
+        // Configured on, but nothing to report from. Still a valid body, so a
+        // scrape sees a live target rather than an error it has to alert on.
+        return (
+            [(header::CONTENT_TYPE, PROMETHEUS_CONTENT_TYPE)],
+            crate::metrics::render(VERSION, GIT_SHA, 0, &[]),
+        );
+    };
+
+    let total = history.count().unwrap_or(0);
+    let latest = history.latest_per_client().unwrap_or_default();
+    (
+        [(header::CONTENT_TYPE, PROMETHEUS_CONTENT_TYPE)],
+        crate::metrics::render(VERSION, GIT_SHA, total, &latest),
+    )
+}
+
+/// The version Prometheus itself advertises for the text format.
+const PROMETHEUS_CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8";
 
 /// The connection's peer address and any forwarding header, or `None` when the
 /// server was started without connect info (which is how the backend-only
@@ -224,11 +255,24 @@ impl<S: Send + Sync> FromRequestParts<S> for ClientAddr {
     type Rejection = std::convert::Infallible;
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        let forwarded_for = parts
+        // Every `x-forwarded-for` line, not just the first. The header is
+        // legally repeatable and proxies split on this: some append a new line
+        // per hop rather than extending one comma-joined list. Reading only
+        // the first drops the hops after it, which for a chain means trusting
+        // the wrong end of it. Joined here so the parser sees one list, and
+        // truncated after joining so the cap bounds the whole thing.
+        let joined = parts
             .headers
-            .get("x-forwarded-for")
-            .and_then(|v| v.to_str().ok())
-            .map(|v| v.chars().take(400).collect());
+            .get_all("x-forwarded-for")
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .collect::<Vec<_>>()
+            .join(",");
+        let forwarded_for = if joined.is_empty() {
+            None
+        } else {
+            Some(joined.chars().take(400).collect())
+        };
         Ok(ClientAddr {
             forwarded_for,
             peer: parts
@@ -609,6 +653,11 @@ struct Status {
     client_kind: &'static str,
     client_kind_label: &'static str,
     server_profile_description: String,
+    /// Whether the page should measure as soon as it loads.
+    ///
+    /// The deployment's default only. A browser that has been told otherwise
+    /// keeps its own choice — this is what a first visit does.
+    autostart: bool,
 }
 
 async fn status(State(state): State<AppState>, client: ClientAddr) -> impl IntoResponse {
@@ -626,6 +675,7 @@ async fn status(State(state): State<AppState>, client: ClientAddr) -> impl IntoR
         client_kind: kind.map(netid::Kind::slug).unwrap_or("unknown"),
         client_kind_label: kind.map(netid::Kind::label).unwrap_or("unknown"),
         server_profile_description: state.config.active_profile().description.clone(),
+        autostart: state.config.server.autostart,
     })
 }
 

@@ -488,6 +488,88 @@ measurements = [ { type = 'download', bytes = 1000, count = 1 } ]
 }
 
 #[tokio::test]
+async fn a_proxy_chain_split_across_repeated_headers_is_read_whole() {
+    // `x-forwarded-for` is a repeatable header, and proxies differ: some extend
+    // one comma-joined list, others append a line per hop. Reading only the
+    // first line drops every hop after it — and since the address to believe is
+    // found by walking the chain from the right, dropping the tail means
+    // believing the wrong end of it. Same chain as the test above, delivered as
+    // two header lines instead of one, and it must reach the same conclusion.
+    const PROXIED: &str = "
+profile = 'test'
+[server]
+static_dir = 'does-not-exist'
+trusted_proxies = ['127.0.0.0/8']
+[profiles.test]
+measurements = [ { type = 'download', bytes = 1000, count = 1 } ]
+";
+    let history = Arc::new(History::in_memory().unwrap());
+    let base = serve_with(PROXIED, Some(history)).await;
+
+    let res = client()
+        .post(format!("{base}/api/results"))
+        .header("x-forwarded-for", "203.0.113.9")
+        .header("x-forwarded-for", "127.0.0.1")
+        .json(&submission(1.0e9, "lan-1g"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 201);
+
+    let runs: serde_json::Value = client()
+        .get(format!("{base}/api/history"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(runs[0]["clientIp"], "203.0.113.9");
+}
+
+#[tokio::test]
+async fn a_run_records_the_build_that_measured_it() {
+    // A stored figure is only interpretable if you know what produced it:
+    // everything recorded before 1.3.1 has its latency inflated by up to 40 ms
+    // by the Nagle bug, and without this there is no way to tell those rows
+    // from correct ones.
+    let history = Arc::new(History::in_memory().unwrap());
+    let base = serve_with(CONFIG, Some(history)).await;
+
+    let res = client()
+        .post(format!("{base}/api/results"))
+        .json(&submission(1.0e9, "lan-1g"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 201);
+    let id = res.json::<serde_json::Value>().await.unwrap()["id"]
+        .as_i64()
+        .unwrap();
+
+    let listed: serde_json::Value = client()
+        .get(format!("{base}/api/history"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(listed[0]["appVersion"], lan_speedtest::VERSION);
+
+    // And on the permalink, which reads through a different query.
+    let one: serde_json::Value = client()
+        .get(format!("{base}/api/results/{id}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(one["appVersion"], lan_speedtest::VERSION);
+}
+
+#[tokio::test]
 async fn status_says_what_kind_of_address_the_client_has() {
     // "Why does it always say 10.42.7.3?" is answerable only if the page can
     // say what sort of address it is looking at.
@@ -767,4 +849,74 @@ async fn a_note_is_capped_in_characters_and_refused_for_a_missing_run() {
         .await
         .unwrap();
     assert_eq!(missing.status(), 404);
+}
+
+#[tokio::test]
+async fn metrics_is_absent_unless_it_is_turned_on() {
+    // The body names every client that has run a test. That is more than an
+    // unauthenticated endpoint should hand out by default, so the route is not
+    // mounted at all rather than mounted and refusing.
+    let history = Arc::new(History::in_memory().unwrap());
+    let base = serve_with(CONFIG, Some(history)).await;
+
+    client()
+        .post(format!("{base}/api/results"))
+        .json(&submission(1.0e9, "lan-1g"))
+        .send()
+        .await
+        .unwrap();
+
+    let res = client().get(format!("{base}/metrics")).send().await.unwrap();
+    assert_ne!(
+        res.status(),
+        200,
+        "metrics must not be served without being asked for"
+    );
+}
+
+#[tokio::test]
+async fn metrics_reports_the_latest_run_per_client_in_base_units() {
+    const WITH_METRICS: &str = "
+profile = 'test'
+[server]
+static_dir = 'does-not-exist'
+metrics = true
+[profiles.test]
+measurements = [ { type = 'download', bytes = 1000, count = 1 } ]
+";
+    let history = Arc::new(History::in_memory().unwrap());
+    let base = serve_with(WITH_METRICS, Some(history)).await;
+
+    // Two runs from the same client: the scrape is a question about now, so
+    // only the newer one should appear.
+    for bps in [5.0e8, 9.4e8] {
+        let res = client()
+            .post(format!("{base}/api/results"))
+            .json(&submission(bps, "lan-1g"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 201);
+    }
+
+    let res = client().get(format!("{base}/metrics")).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    assert!(res
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .starts_with("text/plain"));
+
+    let body = res.text().await.unwrap();
+    assert!(body.contains("speedtest_build_info{"), "{body}");
+    assert!(body.contains("speedtest_history_runs_total 2"), "{body}");
+
+    let series: Vec<&str> = body
+        .lines()
+        .filter(|l| l.starts_with("speedtest_download_bits_per_second{"))
+        .collect();
+    assert_eq!(series.len(), 1, "one series per client, got: {series:?}");
+    assert!(series[0].ends_with(" 940000000"), "{series:?}");
 }

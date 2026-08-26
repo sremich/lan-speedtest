@@ -29,6 +29,8 @@ jitter and packet loss answer and a plain throughput test does not.
 | Raw throughput | Parallel-stream figure, on demand, reported separately from the engine's single-stream result |
 | History | Every run stored, with a trend chart, per-client filtering, and a permalink that redraws the run rather than summarising it |
 | Descriptions | A free-text note per run — where you were, on what, what you were testing — written from the history table or the run's own page |
+| Compare | Two runs side by side, with the difference computed and signed by improvement rather than by arithmetic |
+| Metrics | Optional Prometheus endpoint: the latest run per client, in base units |
 
 ## Nothing leaves your network
 

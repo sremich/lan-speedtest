@@ -1,6 +1,13 @@
-/* Dark by default. This is a LAN tool that lives on a second monitor in a
-   rack room; the light variant exists only so a daytime screenshot is not
-   painful. */
+/* Dark by default. This is a LAN tool that lives on a second monitor in a rack
+   room, and that is where it is read from most of the time.
+   The light variant is for the other case: standing in a bright room with a
+   phone, walking the house looking for the dead spot — which is exactly when
+   the dark one is unreadable.
+
+   Three states, deliberately. An explicit choice stamps `data-theme` on the
+   root and wins outright; with nothing stamped, the system preference decides.
+   The dark block is therefore written as "system says light, and the reader has
+   not said dark", so both directions of the toggle beat the system. */
 
 :root {
   color-scheme: dark;
@@ -21,6 +28,12 @@
   --average: #d29922;
   --poor: #db6d28;
   --bad: #f85149;
+
+  /* The chip behind the percentile label sits over a filled gradient, and the
+     shadow under a tooltip has to read against the page. Both are the ground
+     colour rather than a fixed black, so the light palette can invert them. */
+  --chip-bg: rgba(13, 17, 23, 0.72);
+  --shadow: rgba(0, 0, 0, 0.5);
 
   --radius: 10px;
   --gap: 16px;
@@ -250,7 +263,7 @@ body {
   transform: translateY(calc(-100% - 5px));
   /* A chip, because the label sits over the curve it describes and dim text
      on a filled gradient is unreadable. */
-  background: rgba(13, 17, 23, 0.72);
+  background: var(--chip-bg);
   border-radius: 3px;
   padding: 0 4px 1px;
   font-size: 0.65rem;
@@ -369,7 +382,7 @@ body {
   color: var(--text);
   pointer-events: none;
   white-space: nowrap;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 6px 18px var(--shadow);
 }
 
 .tip__head {
@@ -1006,4 +1019,222 @@ g.box__row.is-hovered .box__box {
   font-size: 0.8rem;
   font-weight: 400;
   color: var(--text-dim);
+}
+
+/* Provenance: which build measured a run.
+   Neutral when the run is sound, and warned when its latency predates the
+   TCP_NODELAY fix in 1.3.1 — the figure is left as recorded, so the marking is
+   the only thing telling the reader it is not comparable with newer rows. */
+#provenance[data-suspect='false'] {
+  color: var(--text-dim);
+}
+
+#provenance[data-suspect='true'],
+.suspect {
+  color: var(--average);
+}
+
+.suspect {
+  cursor: help;
+  border-bottom: 1px dotted currentColor;
+}
+
+.suspect__mark {
+  font-size: 0.8em;
+  vertical-align: super;
+  margin-left: 1px;
+}
+
+/* Auto-start: a control, not a buried setting. A test moves hundreds of
+   megabytes, so whether the page does that on load is worth being able to see
+   and change without reading the documentation. */
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+}
+
+.toggle input {
+  accent-color: var(--accent);
+  cursor: pointer;
+  margin: 0;
+}
+
+.toggle:hover {
+  color: var(--text);
+}
+
+.idle-note {
+  margin-top: 8px;
+}
+
+/* Comparing two runs. */
+.cell--pick { width: 1%; padding-right: 0; }
+.cell--pick input { accent-color: var(--accent); cursor: pointer; margin: 0; }
+
+.cmp__bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 0;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.85rem;
+  color: var(--text-dim);
+}
+
+.cmp__heads {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.cmp__head {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.cmp__side {
+  font-family: var(--font-num);
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  letter-spacing: 0.08em;
+}
+
+.cmp__label { font-size: 1rem; margin: 2px 0 4px; }
+.cmp__meta { font-size: 0.78rem; color: var(--text-dim); margin-bottom: 6px; }
+
+.cmp__table { width: 100%; border-collapse: collapse; }
+
+.cmp__table th,
+.cmp__table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+
+.cmp__table th[scope='row'] { font-weight: 400; color: var(--text-dim); }
+
+/* Signed by improvement, not by arithmetic: on a latency row a smaller number
+   is the good one, and colouring by the sign alone would say the opposite. */
+.cmp__delta { font-family: var(--font-num); }
+.cmp__delta[data-verdict='better'] { color: var(--great); }
+.cmp__delta[data-verdict='worse'] { color: var(--bad); }
+.cmp__delta[data-verdict='same'],
+.cmp__delta[data-verdict='none'] { color: var(--text-dim); }
+
+.cmp__traces {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 12px;
+  margin-top: 20px;
+}
+
+#caveat[data-suspect='true'] { color: var(--average); }
+
+/* A row whose difference is dominated by our own TCP_NODELAY fix rather than
+   by the network. Greyed rather than hidden: the figures are real, it is the
+   comparison between them that is not. */
+.cmp__table tr[data-caveat='true'] th,
+.cmp__table tr[data-caveat='true'] .cmp__delta {
+  color: var(--text-dim);
+}
+
+.cmp__table tr[data-caveat='true'] .suspect__mark {
+  color: var(--average);
+  cursor: help;
+}
+
+/* ---------------------------------------------------------------------------
+   Light.
+
+   Only the tokens are redefined — no rule below the palette knows which theme
+   is in force, which is what keeps the two from drifting apart. The accent
+   stays the same hue and is darkened rather than replaced, because a chart
+   whose series changed colour with the theme would be unreadable in a
+   screenshot shared between the two.
+   --------------------------------------------------------------------------- */
+
+/* Written twice on purpose. One block is "the system asked for light and the
+   reader has not overridden it"; the other is "the reader asked for light".
+   They cannot be merged into one selector list because only one of them lives
+   inside a media query, and plain CSS has no way to share a declaration block
+   across that boundary. Keep them identical. */
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']) {
+    color-scheme: light;
+
+    --bg: #ffffff;
+    --bg-raised: #f6f8fa;
+    --border: #d8dee4;
+    --text: #1f2328;
+    --text-dim: #636c76;
+    --accent: #bc5c0a;
+    --accent-soft: rgba(188, 92, 10, 0.14);
+    --upload: #7c3aed;
+
+    --great: #1a7f37;
+    --good: #2da44e;
+    --average: #9a6700;
+    --poor: #bc4c00;
+    --bad: #cf222e;
+
+    --chip-bg: rgba(255, 255, 255, 0.86);
+    --shadow: rgba(31, 35, 40, 0.18);
+  }
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --bg: #ffffff;
+  --bg-raised: #f6f8fa;
+  --border: #d8dee4;
+  --text: #1f2328;
+  --text-dim: #636c76;
+  --accent: #bc5c0a;
+  --accent-soft: rgba(188, 92, 10, 0.14);
+  --upload: #7c3aed;
+
+  --great: #1a7f37;
+  --good: #2da44e;
+  --average: #9a6700;
+  --poor: #bc4c00;
+  --bad: #cf222e;
+
+  --chip-bg: rgba(255, 255, 255, 0.86);
+  --shadow: rgba(31, 35, 40, 0.18);
+}
+
+/* The stage colours are set as literals in the chevron rules, which is fine on
+   either ground except for the two lightest shades. Darkened for light so a
+   finished stage is still distinguishable from an unfinished one. */
+:root[data-theme='light'] .chev--latency.is-done[data-shade='1'],
+:root:not([data-theme='dark']) .chev--latency.is-done[data-shade='1'] {
+  background: #4a86d8;
+}
+
+.theme-toggle {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-dim);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 6px 10px;
+  line-height: 1;
+}
+
+.theme-toggle:hover {
+  color: var(--text);
+  border-color: var(--text-dim);
 }

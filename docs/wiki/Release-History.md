@@ -5,6 +5,31 @@ pre-releases; from 1.0.0 they are full releases. The 10 GbE saturation check
 was waived, and "no external traffic" is proven by an end-to-end test on every
 push rather than by a manual packet capture.
 
+## 1.5.0
+
+What measured it, whether to measure at all, and what changed.
+
+Built from an external audit's feature requests, verified against the code
+rather than taken at face value.
+
+- **Every run records its build.** Runs from before 1.3.1 carry up to 40 ms of
+  the `TCP_NODELAY` stall in their latency and were indistinguishable from
+  correct ones. They are now marked, in the history and on the run's own page.
+  The stored number is never adjusted — it is what was measured.
+- **Auto-start is refusable**: `?autostart=0` for a visit, a remembered toggle
+  for the browser, `server.autostart` for the deployment. On by default.
+  Changing the profile now clears the result instead of launching a run.
+- **A compare page**, `/compare.html?a=N&b=M`, reached by picking two rows in
+  the history. Differences are signed by improvement rather than by
+  arithmetic, with a 2% noise floor; latency rows are marked when either run
+  predates 1.3.1.
+- **`/metrics`** in Prometheus format, off by default. The latest run per
+  client, in base units, omitting figures that were never measured.
+- **Retention**, separately for runs and for their sample blobs. Both off by
+  default.
+- **A `lan-2.5g` profile**, a **light theme** with a three-state toggle, and a
+  **web manifest** so the page can live on a phone's home screen.
+
 ## 1.4.0
 
 The run, described and explained.

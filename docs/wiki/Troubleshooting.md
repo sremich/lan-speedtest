@@ -20,7 +20,7 @@ transfers, so no size qualified. The engine's default is 250 ms; a 250 MB
 download at 10 Gbps takes 200 ms. Lower the threshold or enlarge the
 transfers. See [Configuration](Configuration.md).
 
-**If loaded latency shows `<0.1 ms`**, the reading is genuinely zero and there
+**If loaded latency shows `<0.01 ms`**, the reading is genuinely zero and there
 is nothing to fix. This is most likely in **Firefox**, which coarsens resource
 timing to ~1 ms (Chrome coarsens to ~0.1 ms). On a LAN with a sub-millisecond
 round trip, every Firefox latency reading rounds to exactly 0 — and 0 is

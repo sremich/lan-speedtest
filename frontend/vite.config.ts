@@ -12,11 +12,16 @@ export default defineConfig({
     outDir: 'dist',
     emptyOutDir: true,
     rollupOptions: {
-      // Three pages, each a plain static asset for the Rust server to serve.
+      // Every page, each a plain static asset for the Rust server to serve.
+      //
+      // A page missing from this list is silently not built: the Dockerfile
+      // copies `frontend/*.html` by glob, so the HTML ships and the script it
+      // references does not. Add the page here at the same time as the file.
       input: {
         index: resolve(__dirname, 'index.html'),
         history: resolve(__dirname, 'history.html'),
         result: resolve(__dirname, 'result.html'),
+        compare: resolve(__dirname, 'compare.html'),
       },
       output: { manualChunks: undefined },
     },

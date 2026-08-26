@@ -197,7 +197,10 @@ test('a history row opens the run it describes', async ({ page }) => {
     .toBe('loaded');
 
   const row = page.locator('#rows tr').first();
-  const shown = (await row.locator('td').nth(2).textContent())?.trim();
+  // By name, not by column index: this read `td` index 2 until a checkbox
+  // column was added in front of it, at which point it silently compared the
+  // client address with a bandwidth figure.
+  const shown = (await row.getByTestId('row-download').textContent())?.trim();
 
   await row.getByTestId('open-result').click();
   await expect
@@ -297,4 +300,90 @@ test('a run can be given a description, from the history and the result page', a
   await expect(page.getByTestId('note')).toContainText('rewritten from the result page', {
     timeout: 20_000,
   });
+});
+
+test('a stored run says which build measured it', async ({ page, request }) => {
+  // A latency figure is only interpretable if you know what produced it:
+  // everything recorded before 1.3.1 carries up to 40 ms of our own Nagle
+  // stall. A run measured now must name its build and must NOT be marked
+  // suspect — the marking has to be earned, or it means nothing.
+  await completeARun(page);
+
+  const runs = await (await request.get('/api/history')).json();
+  expect(runs.length, 'the run just completed should be stored').toBeGreaterThan(0);
+  const version = runs[0].appVersion;
+  expect(version, 'every new run records its build').toMatch(/^\d+\.\d+\.\d+$/);
+
+  await page.goto(`/result.html?id=${runs[0].id}`);
+  const provenance = page.getByTestId('provenance');
+  await expect(provenance).toBeVisible();
+  await expect(provenance).toContainText(version);
+  await expect(provenance).toHaveAttribute('data-suspect', 'false');
+  await expect(provenance).not.toContainText('40 ms');
+
+  // And the history table does not asterisk a sound run.
+  await page.goto('/history.html');
+  await expect(page.locator('#rows tr').first()).toBeVisible();
+  expect(await page.locator('#rows tr').first().locator('.suspect').count()).toBe(0);
+});
+
+test('two runs can be selected and compared, with the difference computed', async ({
+  page,
+  request,
+}) => {
+  // The question the compare page exists to answer is "did that change help?".
+  // A single run cannot answer it, and two tabs answer it badly.
+  await completeARun(page);
+  await completeARun(page);
+
+  const runs = await (await request.get('/api/history')).json();
+  expect(runs.length, 'need two runs to compare').toBeGreaterThanOrEqual(2);
+
+  await page.goto('/history.html');
+  const boxes = page.locator('input.pick');
+  await expect(boxes.first()).toBeVisible();
+
+  // Nothing selected: no bar.
+  await expect(page.getByTestId('compare-bar')).toBeHidden();
+
+  await boxes.nth(0).check();
+  await expect(page.getByTestId('compare-bar')).toBeVisible();
+  await expect(page.getByTestId('compare-count')).toContainText('pick one more');
+  await expect(page.getByTestId('compare-go')).toBeHidden();
+
+  await boxes.nth(1).check();
+  await expect(page.getByTestId('compare-go')).toBeVisible();
+  await page.getByTestId('compare-go').click();
+
+  await expect(page.locator('body')).toHaveAttribute('data-compare-state', 'loaded');
+  await expect(page.getByTestId('head-a')).toContainText('A');
+  await expect(page.getByTestId('head-b')).toContainText('B');
+
+  // A row per metric, each with a computed change rather than two numbers left
+  // for the reader to difference.
+  const rows = page.locator('#rows tr');
+  expect(await rows.count()).toBeGreaterThanOrEqual(5);
+  const deltas = page.locator('.cmp__delta');
+  expect(await deltas.count()).toBe(await rows.count());
+
+  // Every delta is either a signed percentage or an honest dash.
+  for (const text of await deltas.allTextContents()) {
+    expect(text.trim()).toMatch(/^([+-]?\d+\.\d%|—)$/);
+  }
+
+  // Both runs are current, so nothing should be marked as incomparable.
+  await expect(page.getByTestId('caveat')).toBeHidden();
+});
+
+test('comparing a run with itself is refused rather than drawn as all zeroes', async ({
+  page,
+  request,
+}) => {
+  await completeARun(page);
+  const runs = await (await request.get('/api/history')).json();
+  const id = runs[0].id;
+
+  await page.goto(`/compare.html?a=${id}&b=${id}`);
+  await expect(page.locator('body')).toHaveAttribute('data-compare-state', 'error');
+  await expect(page.getByTestId('error')).toContainText('same run');
 });

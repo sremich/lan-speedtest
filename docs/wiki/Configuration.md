@@ -199,3 +199,65 @@ site_name = "Rack Room Speed Test"
 The name is written into a compose `env_file`, which has no quoting, so a
 newline or a `#` is rejected at validation rather than silently truncating the
 name on the guest.
+
+## Metrics
+
+`server.metrics` (or `SPEEDTEST_METRICS`) serves `/metrics` in Prometheus text
+format. **Off by default**: the body names every client that has ever run a
+test, which is more than an unauthenticated endpoint should hand out unless
+someone has asked for it. There is no authentication on it — put it behind
+whatever your reverse proxy or firewall already does, or leave it off.
+
+What it exports is the **most recent run per client**, not the history. A
+scrape is a question about now; the history is already a database, and
+re-exporting all of it every fifteen seconds is the wrong shape for both.
+
+```
+speedtest_build_info{version,git_sha}                    1
+speedtest_history_runs_total                             gauge, not a counter —
+                                                         pruning makes it fall
+speedtest_download_bits_per_second{client,name,profile}
+speedtest_upload_bits_per_second{client,name,profile}
+speedtest_latency_seconds{client,name,profile}
+speedtest_loaded_latency_download_seconds{...}
+speedtest_loaded_latency_upload_seconds{...}
+speedtest_jitter_seconds{client,name,profile}
+speedtest_packet_loss_ratio{client,name,profile}
+speedtest_run_timestamp_seconds{client,name,profile}
+```
+
+Two things worth knowing before building a dashboard on it:
+
+- **Base units**, per Prometheus convention: seconds rather than milliseconds,
+  a ratio rather than a percentage. Scale for display; a unit that was thrown
+  away cannot be recovered.
+- **A figure that was never measured is absent, not zero.** No packet-loss
+  stage and 0% packet loss are different claims, and a graph cannot tell them
+  apart once both are `0`. Use `absent()` if you want to alert on the
+  difference.
+
+The address is always the `client` label and never changes. A friendly name
+rides alongside in `name` rather than replacing it, so renaming a client does
+not silently become a new time series and break every dashboard built on it.
+
+## Retention
+
+Both windows are **off by default** (`0` = keep forever). Quietly deleting a
+homelab's measurement history because a default said so is not a behaviour
+anyone should have to discover and opt out of.
+
+| Setting | Effect |
+|---|---|
+| `retain_runs_days` | Delete runs older than this |
+| `retain_samples_days` | Drop the per-sample blob, keep the run |
+
+Two windows because the costs differ by orders of magnitude. A summary row is a
+couple of hundred bytes and is what a trend is made of; the sample blob behind
+it can be a quarter of a megabyte and stops being interesting long before the
+run does. Releasing samples while keeping runs is usually what you want — the
+run still draws its headline afterwards, exactly as every run stored before
+1.3.0 already does.
+
+Pruning happens at startup and once a day thereafter, with the cutoff
+recomputed each pass so a long-running service does not freeze its window at
+whatever it was when it booted.

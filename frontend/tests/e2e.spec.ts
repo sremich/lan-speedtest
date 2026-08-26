@@ -14,17 +14,33 @@ const PENDING = '—';
  * True when a latency cell shows nothing usable.
  *
  * Three renderings mean the same thing — the browser could not resolve the
- * interval: `—` (no samples at all), `<0.1 ms` (below what we will print), and
- * `0.0 ms`. Anything that parses as a positive number is a real measurement.
+ * interval: `—` (no samples at all), `<0.01 ms` (below what we will print), and
+ * `0.00 ms`. Anything that parses as a positive number is a real measurement.
  *
  * This exists because Firefox coarsens resource timing to ~1 ms (Chrome to
  * ~0.1 ms), so on a sub-millisecond path its readings collapse to zero or
  * vanish entirely. Which of the three you get varies run to run.
  */
+/**
+ * How a latency figure is allowed to render.
+ *
+ * Two decimals since 1.5.0: a LAN round trip reads about 0.6 ms, where one
+ * decimal throws away a sixth of the figure. Written once and shared, because
+ * this pattern lived inline in two tests and only one of them would have been
+ * found when the format changed.
+ */
+const FLOOR = '<0.01 ms';
+const LATENCY_TEXT = /^(<0\.01|\d+\.\d{2}) ms$/;
+
+function isLatencyRendering(text: string | null): boolean {
+  const t = text?.trim() ?? '';
+  return t === PENDING || LATENCY_TEXT.test(t);
+}
+
 function latencyIsUnmeasurable(text: string | null): boolean {
   if (text === null) return true;
   const t = text.trim();
-  if (t === PENDING || t === '<0.1 ms') return true;
+  if (t === PENDING || t === FLOOR) return true;
   const value = Number.parseFloat(t);
   return Number.isNaN(value) || value <= 0.05;
 }
@@ -94,7 +110,7 @@ test('a full run completes and reports every headline metric', async ({
     const value = await page.getByTestId(id).textContent();
     expect(value, `${id} should render something`).not.toBeNull();
     expect(
-      value!.trim() === PENDING || /^(<0\.1|\d+\.\d+) ms$/.test(value!.trim()),
+      isLatencyRendering(value),
       `${browserName}: unexpected ${id} rendering: ${value}`,
     ).toBe(true);
   }
@@ -377,7 +393,7 @@ test('loaded latency and jitter are shown per direction', async ({ page }) => {
     const value = await page.getByTestId(id).textContent();
     expect(value, `${id} should render something`).not.toBeNull();
     expect(
-      value!.trim() === PENDING || /^(<0\.1|\d+\.\d+) ms$/.test(value!.trim()),
+      isLatencyRendering(value),
       `unexpected ${id} rendering: ${value}`,
     ).toBe(true);
   }
@@ -695,9 +711,16 @@ test('the profile is selectable, and the run reports the one it used', async ({ 
   await waitForCompletion(page);
   await expect(page.locator('body')).toHaveAttribute('data-profile', 'quick');
 
-  // Choosing another profile re-runs with it rather than relabelling the old
-  // numbers, which would be the worst of both.
+  // Choosing another profile clears the old numbers rather than relabelling
+  // them — figures measured under one profile shown under another's name would
+  // be the worst of both. It no longer re-runs on its own: on `lan-10g` a
+  // brushed dropdown was several gigabytes down the wire before you could
+  // react, so the run is explicit.
   await picker.selectOption('lan-1g');
+  await expect(page.locator('body')).toHaveAttribute('data-test-state', 'idle');
+  await expect(page.getByTestId('download')).toHaveText('—');
+
+  await page.getByTestId('restart').click();
   await expect
     .poll(async () => page.locator('body').getAttribute('data-profile'), { timeout: 60_000 })
     .toBe('lan-1g');
@@ -722,4 +745,103 @@ test('a running test can be paused and resumed', async ({ page }) => {
 
   // And it still finishes afterwards.
   await waitForCompletion(page);
+});
+
+test('auto-start can be turned off, and then nothing is measured until asked', async ({ page }) => {
+  // A run moves hundreds of megabytes. Opening the page to read a setting
+  // should not do that behind your back — least of all during the video call
+  // that made you suspicious of the network in the first place.
+  await page.goto('/?autostart=0');
+
+  await expect(page.locator('body')).toHaveAttribute('data-test-state', 'idle');
+  await expect(page.getByTestId('idle-note')).toBeVisible();
+  await expect(page.getByTestId('phase')).toContainText('Ready');
+  await expect(page.getByTestId('restart')).toBeEnabled();
+
+  // Nothing was measured.
+  await expect(page.getByTestId('download')).toHaveText('—');
+
+  // The URL wins for this load but must not be remembered: a link someone
+  // sent you should not silently reconfigure your browser.
+  const remembered = await page.evaluate(() => localStorage.getItem('speedtest.autostart'));
+  expect(remembered, 'the URL override is per-visit, not sticky').toBeNull();
+
+  // And pressing the button does run it.
+  await page.getByTestId('restart').click();
+  await expect(page.locator('body')).toHaveAttribute('data-test-state', 'running');
+});
+
+test('the auto-start toggle is remembered across visits', async ({ page }) => {
+  await page.goto('/?autostart=0');
+  await expect(page.getByTestId('autostart')).not.toBeChecked();
+
+  await page.getByTestId('autostart').check();
+  expect(await page.evaluate(() => localStorage.getItem('speedtest.autostart'))).toBe('1');
+
+  await page.getByTestId('autostart').uncheck();
+  expect(await page.evaluate(() => localStorage.getItem('speedtest.autostart'))).toBe('0');
+
+  // A plain visit now honours the remembered choice rather than the default.
+  await page.goto('/');
+  await expect(page.locator('body')).toHaveAttribute('data-test-state', 'idle');
+});
+
+test('changing the profile clears the result instead of launching a new run', async ({ page }) => {
+  // It used to re-run immediately, so a brushed dropdown on lan-10g was
+  // several gigabytes down the wire before you could react. Clearing keeps the
+  // reason for that behaviour — stale figures under a new label are a lie —
+  // without the side effect.
+  await page.goto('/');
+  await waitForCompletion(page);
+  await expect(page.getByTestId('download')).not.toHaveText('—');
+
+  const options = await page.getByTestId('profile-select').locator('option').all();
+  test.skip(options.length < 2, 'needs more than one profile to switch between');
+
+  const values = await Promise.all(options.map((o) => o.getAttribute('value')));
+  const current = await page.getByTestId('profile-select').inputValue();
+  const other = values.find((v) => v && v !== current);
+  test.skip(!other, 'needs a second profile');
+
+  await page.getByTestId('profile-select').selectOption(other!);
+
+  await expect(page.locator('body')).toHaveAttribute('data-test-state', 'idle');
+  await expect(page.getByTestId('download')).toHaveText('—');
+});
+
+test('the theme can be switched, and is remembered', async ({ page }) => {
+  await page.goto('/?autostart=0');
+
+  const toggle = page.getByTestId('theme-toggle');
+  await expect(toggle).toBeVisible();
+
+  await toggle.click();
+  const first = await page.evaluate(() => document.documentElement.dataset.theme);
+  expect(first === 'light' || first === 'dark').toBe(true);
+
+  // The page background actually changes, rather than only the attribute.
+  const painted = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+  expect(painted, 'the body must paint its own ground').not.toBe('rgba(0, 0, 0, 0)');
+
+  await page.reload();
+  expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe(first);
+
+  await toggle.click();
+  const second = await page.evaluate(() => document.documentElement.dataset.theme);
+  expect(second).not.toBe(first);
+});
+
+test('the app is installable: a manifest and an icon are served', async ({ page, request }) => {
+  await page.goto('/?autostart=0');
+  await expect(page.locator('link[rel="manifest"]')).toHaveCount(1);
+
+  const manifest = await request.get('/manifest.webmanifest');
+  expect(manifest.status()).toBe(200);
+  const parsed = JSON.parse(await manifest.text());
+  expect(parsed.name).toBeTruthy();
+  expect(parsed.start_url).toBe('/');
+  expect(parsed.icons.length).toBeGreaterThan(0);
+
+  const icon = await request.get(parsed.icons[0].src);
+  expect(icon.status(), 'the manifest must not name an icon that is not there').toBe(200);
 });

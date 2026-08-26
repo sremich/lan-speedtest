@@ -1,17 +1,31 @@
 <!doctype html>
-<html lang="en" data-theme="dark">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0d1117" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/icon.svg" />
     <meta name="robots" content="noindex, nofollow" />
     <title>Result — LAN Speed Test</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>&#9889;</text></svg>" />
+    <script>
+      // Before first paint, so a reader who chose light does not get a flash of
+      // the dark palette on every navigation. Inline and tiny for that reason:
+      // a module script would run after the page has already been painted.
+      try {
+        var t = localStorage.getItem('speedtest.theme');
+        if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <main class="page">
       <header class="page__head">
         <h1 class="page__title" id="page-title" data-testid="result-title">Result</h1>
         <div class="page__actions">
+          <button class="theme-toggle" id="theme-toggle" data-testid="theme-toggle" type="button">Light</button>
           <a class="btn" href="/history.html" data-testid="history-link">History</a>
           <a class="btn" href="/" data-testid="new-test">New test</a>
         </div>
@@ -88,6 +102,10 @@
         <span id="measured-at" data-testid="measured-at"></span>
         <span id="profile" data-testid="profile"></span>
         <span id="agent" data-testid="result-agent"></span>
+        <!-- Which build measured this, and whether its latency predates the
+             TCP_NODELAY fix. Carries its own state so it can be read as a
+             plain fact or as a caveat. -->
+        <span id="provenance" data-testid="provenance" hidden></span>
       </footer>
     </main>
 

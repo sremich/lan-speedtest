@@ -83,6 +83,37 @@ pub struct ServerConfig {
     /// Empty by default, and that default is the safe one: with no proxy in
     /// front, honouring the header would let anyone on the LAN attribute a run
     /// to any address they chose. List a proxy here only if you run one.
+    /// Whether the page starts measuring the moment it loads.
+    ///
+    /// On by default, which is what the brief asked for and what makes the
+    /// page useful as a bookmark. Turn it off for a deployment where an
+    /// accidental visit during a video call is worse than an extra click —
+    /// the browser can override it either way, per client.
+    #[serde(default = "default_autostart")]
+    pub autostart: bool,
+    /// Delete stored runs older than this many days. `0` keeps them forever.
+    ///
+    /// Off by default, and that is the right default: quietly deleting a
+    /// homelab's measurement history because a number said so is not a
+    /// behaviour anyone should have to discover and opt out of.
+    #[serde(default)]
+    pub retain_runs_days: u32,
+    /// Drop the per-sample blob from runs older than this many days, keeping
+    /// the run itself. `0` keeps the samples forever.
+    ///
+    /// A separate window because the costs differ by orders of magnitude: the
+    /// summary is a couple of hundred bytes and is what a trend is made of;
+    /// the samples behind it can be a quarter of a megabyte each and stop
+    /// being interesting long before the run does.
+    #[serde(default)]
+    pub retain_samples_days: u32,
+    /// Serve `/metrics` in Prometheus text format.
+    ///
+    /// Off by default. The endpoint reports every client address that has ever
+    /// run a test, which is more than an unauthenticated endpoint should offer
+    /// unless someone has asked for it.
+    #[serde(default)]
+    pub metrics: bool,
     #[serde(default)]
     pub trusted_proxies: Vec<String>,
     #[serde(default)]
@@ -137,6 +168,10 @@ impl Default for ServerConfig {
             tls_cert_file: None,
             tls_key_file: None,
             history_db: default_history_db(),
+            autostart: default_autostart(),
+            retain_runs_days: 0,
+            retain_samples_days: 0,
+            metrics: false,
             trusted_proxies: Vec::new(),
             reverse_dns: ReverseDnsConfig::default(),
         }
@@ -244,6 +279,10 @@ pub struct Measurement {
     pub responses_wait_time: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub connection_timeout: Option<u32>,
+}
+
+fn default_autostart() -> bool {
+    true
 }
 
 fn default_site_name() -> String {
@@ -402,6 +441,30 @@ impl Config {
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect();
+        }
+        if let Some(v) = non_empty_env("SPEEDTEST_AUTOSTART") {
+            // Read as a negative too: "off" for a switch called autostart is a
+            // more natural thing to write than "0", and silently ignoring it
+            // would leave the deployment measuring on every page load while
+            // the operator believed otherwise.
+            self.server.autostart = !matches!(
+                v.to_ascii_lowercase().as_str(),
+                "0" | "false" | "no" | "off"
+            );
+        }
+        if let Some(v) = non_empty_env("SPEEDTEST_METRICS") {
+            self.server.metrics =
+                matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on");
+        }
+        if let Some(v) = non_empty_env("SPEEDTEST_RETAIN_RUNS_DAYS") {
+            if let Ok(n) = v.parse() {
+                self.server.retain_runs_days = n;
+            }
+        }
+        if let Some(v) = non_empty_env("SPEEDTEST_RETAIN_SAMPLES_DAYS") {
+            if let Ok(n) = v.parse() {
+                self.server.retain_samples_days = n;
+            }
         }
         if let Some(v) = non_empty_env("SPEEDTEST_REVERSE_DNS") {
             self.server.reverse_dns.enabled =
@@ -647,6 +710,31 @@ measurements = [
                 );
             }
         }
+    }
+
+    #[test]
+    fn autostart_defaults_on_and_reads_the_words_people_actually_write() {
+        // On by default: that is the brief, and it is what makes the page
+        // useful as a bookmark. A deployment can turn it off, and the switch
+        // has to understand "off" as well as "0" — silently ignoring a value
+        // would leave the page measuring on every visit while the operator
+        // believed it did not.
+        let cfg: Config = toml::from_str(MINIMAL).unwrap();
+        assert!(cfg.server.autostart, "the default is on");
+
+        for word in ["0", "false", "no", "off", "OFF", "False"] {
+            let mut cfg: Config = toml::from_str(MINIMAL).unwrap();
+            std::env::set_var("SPEEDTEST_AUTOSTART", word);
+            cfg.apply_env_overrides();
+            assert!(!cfg.server.autostart, "{word} should turn autostart off");
+        }
+        for word in ["1", "true", "yes", "on"] {
+            let mut cfg: Config = toml::from_str(MINIMAL).unwrap();
+            std::env::set_var("SPEEDTEST_AUTOSTART", word);
+            cfg.apply_env_overrides();
+            assert!(cfg.server.autostart, "{word} should leave autostart on");
+        }
+        std::env::remove_var("SPEEDTEST_AUTOSTART");
     }
 
     #[test]

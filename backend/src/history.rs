@@ -115,6 +115,14 @@ impl SubmittedSummary {
     }
 }
 
+/// What a prune actually removed. Reported rather than assumed, so the log
+/// says what happened instead of what was requested.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Pruned {
+    pub runs_deleted: usize,
+    pub samples_cleared: usize,
+}
+
 /// One stored run.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -140,6 +148,9 @@ pub struct StoredRun {
     pub scores: std::collections::BTreeMap<String, String>,
     /// A note written by hand after the fact. `None` when never set.
     pub note: Option<String>,
+    /// The build that measured this run. `None` for runs stored before the
+    /// version was recorded, whose latency may predate the `TCP_NODELAY` fix.
+    pub app_version: Option<String>,
 }
 
 /// A single run with everything kept about it, for a permalink.
@@ -200,8 +211,12 @@ impl History {
                  -- to add does not mean the data is gone.
                  summary_json        TEXT    NOT NULL DEFAULT '{}'
              );
-             CREATE INDEX IF NOT EXISTS runs_recorded_at ON runs (recorded_at DESC);
-             CREATE INDEX IF NOT EXISTS runs_client_ip   ON runs (client_ip);
+             -- Both columns, in the order `recent` sorts by. With only
+             -- `recorded_at` indexed, SQLite can satisfy the first key from the
+             -- index and then has to sort the ties by id in memory.
+             CREATE INDEX IF NOT EXISTS runs_recorded_at_id
+                 ON runs (recorded_at DESC, id DESC);
+             CREATE INDEX IF NOT EXISTS runs_client_ip ON runs (client_ip);
 
              -- Friendly names for clients, keyed by address. Populated by hand;
              -- absent entries simply fall back to the address.
@@ -255,6 +270,20 @@ impl History {
                 [],
             )?;
         }
+        // Which build measured this run.
+        //
+        // Added because a stored figure is only interpretable if you know what
+        // produced it: every run recorded before 1.3.1 has its latency
+        // inflated by up to 40 ms by the `TCP_NODELAY` bug, and until this
+        // column existed there was no way to tell those rows apart from
+        // correct ones. Empty means "recorded before the version was tracked",
+        // which is a weaker claim than a version and is presented as one.
+        if !existing.iter().any(|c| c == "app_version") {
+            conn.execute(
+                "ALTER TABLE runs ADD COLUMN app_version TEXT NOT NULL DEFAULT ''",
+                [],
+            )?;
+        }
         Ok(())
     }
 
@@ -283,8 +312,9 @@ impl History {
                  recorded_at, client_ip, user_agent, profile,
                  download, upload, latency, jitter,
                  down_loaded_latency, up_loaded_latency, packet_loss,
-                 total_duration_ms, scores_json, summary_json, points_json
-             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+                 total_duration_ms, scores_json, summary_json, points_json,
+                 app_version
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
             params![
                 recorded_at,
                 client_ip,
@@ -301,6 +331,7 @@ impl History {
                 scores_json,
                 summary_json,
                 points_json,
+                crate::VERSION,
             ],
         )?;
         Ok(conn.last_insert_rowid())
@@ -318,7 +349,8 @@ impl History {
         let sql = "SELECT r.id, r.recorded_at, r.client_ip, c.name, r.user_agent, r.profile,
                           r.download, r.upload, r.latency, r.jitter,
                           r.down_loaded_latency, r.up_loaded_latency, r.packet_loss,
-                          r.total_duration_ms, r.scores_json, n.name, r.note
+                          r.total_duration_ms, r.scores_json, n.name, r.note,
+                          r.app_version
                    FROM runs r
                    LEFT JOIN client_names c ON c.client_ip = r.client_ip
                    LEFT JOIN resolved_names n ON n.client_ip = r.client_ip
@@ -347,6 +379,7 @@ impl History {
                 total_duration_ms: row.get(13)?,
                 scores: serde_json::from_str(&scores_json).unwrap_or_default(),
                 note: non_empty(row.get::<_, Option<String>>(16)?),
+                app_version: non_empty(row.get::<_, Option<String>>(17)?),
             })
         })?;
 
@@ -374,6 +407,96 @@ impl History {
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// The most recent run from each client.
+    ///
+    /// What a dashboard wants: one current reading per machine, rather than
+    /// the whole history re-exported on every scrape. The window function
+    /// picks the newest row per client in one pass — the alternative, a
+    /// correlated subquery per client, gets slower with every run stored.
+    pub fn latest_per_client(&self) -> Result<Vec<StoredRun>, HistoryError> {
+        let conn = self.conn.lock().expect("history mutex");
+        let mut stmt = conn.prepare(
+            "SELECT id, recorded_at, client_ip, client_name, hostname, user_agent, profile,
+                    download, upload, latency, jitter,
+                    down_loaded_latency, up_loaded_latency, packet_loss,
+                    total_duration_ms, scores_json, note, app_version
+             FROM (
+               SELECT r.id, r.recorded_at, r.client_ip, c.name AS client_name,
+                      n.name AS hostname, r.user_agent, r.profile,
+                      r.download, r.upload, r.latency, r.jitter,
+                      r.down_loaded_latency, r.up_loaded_latency, r.packet_loss,
+                      r.total_duration_ms, r.scores_json, r.note, r.app_version,
+                      ROW_NUMBER() OVER (
+                        PARTITION BY r.client_ip
+                        ORDER BY r.recorded_at DESC, r.id DESC
+                      ) AS rank
+               FROM runs r
+               LEFT JOIN client_names c ON c.client_ip = r.client_ip
+               LEFT JOIN resolved_names n ON n.client_ip = r.client_ip
+             )
+             WHERE rank = 1
+             ORDER BY recorded_at DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let scores_json: String = row.get(15)?;
+            Ok(StoredRun {
+                id: row.get(0)?,
+                recorded_at: row.get(1)?,
+                client_ip: row.get(2)?,
+                client_name: row.get(3)?,
+                hostname: non_empty(row.get::<_, Option<String>>(4)?),
+                user_agent: row.get(5)?,
+                profile: row.get(6)?,
+                download: row.get(7)?,
+                upload: row.get(8)?,
+                latency: row.get(9)?,
+                jitter: row.get(10)?,
+                down_loaded_latency: row.get(11)?,
+                up_loaded_latency: row.get(12)?,
+                packet_loss: row.get(13)?,
+                total_duration_ms: row.get(14)?,
+                scores: serde_json::from_str(&scores_json).unwrap_or_default(),
+                note: non_empty(row.get::<_, Option<String>>(16)?),
+                app_version: non_empty(row.get::<_, Option<String>>(17)?),
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Drops old data, and reports what it dropped.
+    ///
+    /// Two windows because the two costs are different by orders of magnitude.
+    /// A summary row is a couple of hundred bytes and is the thing you keep for
+    /// a trend; the sample blob behind it can be a quarter of a megabyte and is
+    /// only interesting while the run is recent. So the blobs can be released
+    /// long before the rows they belong to, and a run that loses its samples
+    /// still draws its headline — `points_json` of `{}` is exactly what every
+    /// run stored before 1.3.0 already looks like.
+    ///
+    /// Both windows are off by default. Silently deleting a homelab's history
+    /// because a default said so is not a behaviour to opt out of.
+    pub fn prune(
+        &self,
+        runs_older_than: Option<&str>,
+        samples_older_than: Option<&str>,
+    ) -> Result<Pruned, HistoryError> {
+        let conn = self.conn.lock().expect("history mutex");
+        let mut pruned = Pruned::default();
+
+        if let Some(cutoff) = runs_older_than {
+            pruned.runs_deleted =
+                conn.execute("DELETE FROM runs WHERE recorded_at < ?1", params![cutoff])?;
+        }
+        if let Some(cutoff) = samples_older_than {
+            pruned.samples_cleared = conn.execute(
+                "UPDATE runs SET points_json = '{}'
+                 WHERE recorded_at < ?1 AND points_json <> '{}'",
+                params![cutoff],
+            )?;
+        }
+        Ok(pruned)
     }
 
     pub fn count(&self) -> Result<i64, HistoryError> {
@@ -454,7 +577,7 @@ impl History {
                         r.download, r.upload, r.latency, r.jitter,
                         r.down_loaded_latency, r.up_loaded_latency, r.packet_loss,
                         r.total_duration_ms, r.scores_json, n.name,
-                        r.summary_json, r.points_json, r.note
+                        r.summary_json, r.points_json, r.note, r.app_version
                  FROM runs r
                  LEFT JOIN client_names c ON c.client_ip = r.client_ip
                  LEFT JOIN resolved_names n ON n.client_ip = r.client_ip
@@ -483,6 +606,7 @@ impl History {
                             total_duration_ms: row.get(13)?,
                             scores: serde_json::from_str(&scores_json).unwrap_or_default(),
                             note: non_empty(row.get::<_, Option<String>>(18)?),
+                            app_version: non_empty(row.get::<_, Option<String>>(19)?),
                         },
                         summary: serde_json::from_str(&summary_json).unwrap_or_default(),
                         points: serde_json::from_str(&points_json).unwrap_or_default(),
@@ -735,6 +859,57 @@ mod tests {
             let h = History::open(&path).unwrap();
             assert_eq!(h.count().unwrap(), 1);
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_database_predating_the_version_column_gains_it_and_keeps_its_rows() {
+        // The rows that matter most here are the ones already on disk: they were
+        // measured by a build we can no longer identify, and the migration must
+        // say so rather than inventing a version for them. Anything recorded
+        // afterwards carries the real one.
+        let dir = std::env::temp_dir().join(format!("speedtest-migrate-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("history.db");
+        let _ = std::fs::remove_file(&path);
+
+        {
+            // A database in the pre-`app_version` shape, written by hand so the
+            // test exercises the migration rather than today's schema.
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE runs (
+                     id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                     recorded_at TEXT NOT NULL,
+                     client_ip   TEXT NOT NULL,
+                     user_agent  TEXT NOT NULL DEFAULT '',
+                     profile     TEXT NOT NULL DEFAULT '',
+                     download    REAL, upload REAL, latency REAL, jitter REAL,
+                     down_loaded_latency REAL, up_loaded_latency REAL,
+                     packet_loss REAL, total_duration_ms REAL,
+                     scores_json  TEXT NOT NULL DEFAULT '{}',
+                     summary_json TEXT NOT NULL DEFAULT '{}'
+                 );
+                 INSERT INTO runs (recorded_at, client_ip, latency)
+                 VALUES ('2026-08-24T10:00:00Z', '10.0.0.1', 41.9);",
+            )
+            .unwrap();
+        }
+
+        let h = History::open(&path).unwrap();
+        assert_eq!(h.count().unwrap(), 1, "the existing row must survive");
+
+        let old = &h.recent(10, None).unwrap()[0];
+        assert_eq!(
+            old.app_version, None,
+            "a run from before the column existed has no version to claim"
+        );
+
+        h.record(&submission(1.0e9), "10.0.0.2", "ua", "2026-08-26T10:00:00Z")
+            .unwrap();
+        let new = &h.recent(10, None).unwrap()[0];
+        assert_eq!(new.app_version.as_deref(), Some(crate::VERSION));
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 

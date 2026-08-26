@@ -32,6 +32,26 @@ static_dir = "static"
 # client on the LAN file a run under any address it liked. Put the reverse
 # proxy's address here (CIDR notation) if there is one, and only then.
 trusted_proxies = []
+# Measure as soon as the page loads. On by default, which is what makes the
+# page useful as a bookmark. Turn it off for a deployment where an accidental
+# visit during a call is worse than an extra click — a browser can override it
+# either way, and `?autostart=0` overrides it for a single visit.
+autostart = true
+# Serve /metrics in Prometheus text format. Off by default: the body names
+# every client that has ever run a test, which is more than an unauthenticated
+# endpoint should hand out unless someone has asked for it.
+metrics = false
+# Retention, in days. 0 keeps forever, and that is the default — quietly
+# deleting a homelab's measurement history because a number said so is not a
+# behaviour anyone should have to discover and opt out of.
+#
+# Two windows, because the costs differ by orders of magnitude. A summary row
+# is a couple of hundred bytes and is what a trend is made of; the per-sample
+# blob behind it can be a quarter of a megabyte and stops being interesting
+# long before the run does. Releasing samples while keeping runs is usually
+# what you want: the run still draws its headline afterwards.
+retain_runs_days = 0
+retain_samples_days = 0
 
 [server.reverse_dns]
 # Names clients in the history by asking for their PTR record. Off by default,
@@ -88,6 +108,46 @@ measurements = [
   { type = "download", bytes = 100000000, count = 4 },
   { type = "latency", numPackets = 2 },
   { type = "upload", bytes = 50000000, count = 4 },
+  { type = "latency", numPackets = 2 },
+]
+
+
+# --- 2.5 GbE clients ---------------------------------------------------------
+# The gap between the two profiles above was the widest one: 2.5 GbE is now the
+# default uplink on Wi-Fi 7 access points and on most current motherboards, and
+# a 2.5G client asked to run `lan-1g` finishes each transfer in well under the
+# threshold that makes loaded latency measurable.
+#
+# 2.5 Gbps ~= 312 MB/s, so 60 MB lands near 190 ms — the same ~200 ms target the
+# neighbouring profiles are built around.
+# Quoted: the dot in "2.5" is a key separator in a bare TOML table header, so
+# `[profiles.lan-2.5g]` would declare a profile called `lan-2` with a `5g`
+# field inside it — which fails as an unknown field rather than silently, but
+# only because unknown fields are rejected.
+[profiles."lan-2.5g"]
+description = "2.5 GbE LAN client"
+nominal_bps = 2_500_000_000
+auto_selectable = true
+estimated_server_time = 0.0
+measure_download_loaded_latency = true
+measure_upload_loaded_latency = true
+# 60 MB at 2.5 Gbps is ~190 ms and the smallest upload (25 MB) is ~80 ms, so the
+# threshold has to sit below the latter or the upload stage stops counting as
+# load and the quality ratings go empty. See docs/wiki/Engine-Contract.md.
+loaded_request_min_duration = 40.0
+loaded_latency_throttle = 40.0
+measurements = [
+  { type = "latency", numPackets = 2 },
+  { type = "download", bytes = 2500000, count = 1, bypassMinDuration = true },
+  { type = "latency", numPackets = 20 },
+  { type = "download", bytes = 60000000, count = 4 },
+  { type = "latency", numPackets = 2 },
+  { type = "upload", bytes = 25000000, count = 4 },
+  { type = "latency", numPackets = 2 },
+  { type = "packetLoss", numPackets = 1000, batchSize = 10, batchWaitTime = 10, responsesWaitTime = 3000 },
+  { type = "download", bytes = 150000000, count = 4 },
+  { type = "latency", numPackets = 2 },
+  { type = "upload", bytes = 60000000, count = 4 },
   { type = "latency", numPackets = 2 },
 ]
 

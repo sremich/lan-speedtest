@@ -8,14 +8,21 @@
  */
 
 import './styles.css';
+import { setUpThemeToggle } from './theme';
 import { fetchResult, fetchStatus, setRunNote, type StoredRunDetail } from './api';
-import { formatBandwidth, formatDuration, formatLatency, formatPacketLoss } from './format';
+import {
+  formatBandwidth,
+  formatDuration,
+  formatLatency,
+  formatPacketLoss,
+  latencyPredatesNagleFix,
+} from './format';
 import {
   attachTraceHover,
   drawTrace,
   renderDetail,
+  samplesFromStored,
   type RunSamples,
-  type Sample,
 } from './runview';
 
 /** Human labels for the engine's AIM experience keys. */
@@ -52,6 +59,7 @@ const ui = {
   measuredAt: el('measured-at'),
   profile: el('profile'),
   agent: el('agent'),
+  provenance: el('provenance'),
 };
 
 /** Escapes text destined for innerHTML. User agents are attacker-influenced. */
@@ -73,40 +81,6 @@ let lastSamples: RunSamples | undefined;
 
 /** The run on screen, so the description can be edited against it. */
 let current: StoredRunDetail | undefined;
-
-/**
- * Reads the stored sample blob.
- *
- * Written by whatever version of the front end recorded the run, so nothing
- * here assumes a field is present: a run stored before 1.3.0 has no samples at
- * all, and should still render its headline rather than an error.
- */
-function samplesOf(run: StoredRunDetail): RunSamples {
-  const raw = (run.points ?? {}) as Record<string, unknown>;
-
-  const points = (key: string): Sample[] => {
-    const value = raw[key];
-    if (!Array.isArray(value)) return [];
-    return value.filter(
-      (p): p is Sample =>
-        typeof p === 'object' && p !== null && typeof (p as Sample).bps === 'number',
-    );
-  };
-
-  const numbers = (key: string): number[] => {
-    const value = raw[key];
-    return Array.isArray(value) ? value.filter((n): n is number => typeof n === 'number') : [];
-  };
-
-  return {
-    download: points('download'),
-    upload: points('upload'),
-    idleLatency: numbers('idleLatency'),
-    downLoadedLatency: numbers('downLoadedLatency'),
-    upLoadedLatency: numbers('upLoadedLatency'),
-    ...(run.packetLoss !== null ? { packetLoss: run.packetLoss } : {}),
-  };
-}
 
 /** Short, unambiguous local time. */
 function formatWhen(iso: string): string {
@@ -141,7 +115,7 @@ function render(run: StoredRunDetail): void {
   setText(ui.upLoaded, formatLatency(run.upLoadedLatency));
   setText(ui.packetLoss, formatPacketLoss(optional(run.packetLoss)));
 
-  const samples = samplesOf(run);
+  const samples = samplesFromStored(run.points, run.packetLoss);
   lastSamples = samples;
   drawTrace('download', ui.downloadChart, samples.download, optional(run.download));
   drawTrace('upload', ui.uploadChart, samples.upload, optional(run.upload));
@@ -168,9 +142,39 @@ function render(run: StoredRunDetail): void {
     (run.totalDurationMs !== null ? ` · took ${formatDuration(run.totalDurationMs)}` : '');
   ui.profile.textContent = `profile: ${run.profile}`;
   ui.agent.textContent = run.userAgent;
+  renderProvenance(run);
 
   renderNote(run);
   document.body.dataset.resultState = 'loaded';
+}
+
+/**
+ * What measured this run, and whether its latency can be trusted.
+ *
+ * A run recorded before 1.3.1 carries up to 40 ms of our own Nagle stall in
+ * every latency figure. The number is left exactly as it was recorded — this
+ * says what it is, rather than quietly correcting a measurement after the fact
+ * or presenting an unsound figure as sound. Bandwidth is unaffected: the bug
+ * only ever delayed small responses, which is why it went unnoticed for three
+ * releases while throughput looked right.
+ */
+function renderProvenance(run: StoredRunDetail): void {
+  const suspect = latencyPredatesNagleFix(run.appVersion);
+  ui.provenance.dataset.suspect = String(suspect);
+  ui.provenance.hidden = false;
+
+  if (!suspect) {
+    // A sound run: name the build, quietly, as one more footer fact.
+    ui.provenance.textContent = `measured by ${run.appVersion ?? ''}`;
+    return;
+  }
+
+  const CAVEAT =
+    'the latency figures here may be overstated by up to 40 ms. Bandwidth is unaffected.';
+  ui.provenance.textContent = run.appVersion
+    ? `Measured by ${run.appVersion}, before the TCP_NODELAY fix in 1.3.1 — ${CAVEAT}`
+    : 'Measured before the version was recorded, so this may predate the TCP_NODELAY fix in ' +
+      `1.3.1 — ${CAVEAT}`;
 }
 
 /** The run's description, or an invitation to write one. */
@@ -257,3 +261,6 @@ void (async () => {
     showError(e instanceof Error ? e.message : String(e));
   }
 })();
+
+// Light or dark, remembered, on every page.
+setUpThemeToggle();

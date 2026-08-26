@@ -9,6 +9,7 @@ import SpeedTest from '@cloudflare/speedtest';
 import type { MeasurementSummary, Results, Scores } from '@cloudflare/speedtest';
 
 import './styles.css';
+import { setUpThemeToggle } from './theme';
 import {
   assertLanOnly,
   fetchProfile,
@@ -74,6 +75,9 @@ let serverDefaultProfile = '';
 const PROFILE_KEY = 'speedtest.profile';
 const AUTO = '__auto__';
 
+/** Remembered per browser, overriding whatever the deployment defaults to. */
+const AUTOSTART_KEY = 'speedtest.autostart';
+
 const el = <T extends HTMLElement>(id: string): T => {
   const node = document.getElementById(id);
   if (!node) throw new Error(`missing element #${id}`);
@@ -84,6 +88,8 @@ const ui = {
   siteName: el('site-name'),
   phase: el('phase'),
   restart: el<HTMLButtonElement>('restart'),
+  autostart: el<HTMLInputElement>('autostart'),
+  idleNote: el('idle-note'),
   error: el('error'),
   download: el('download'),
   downloadUnit: el('download-unit'),
@@ -179,6 +185,49 @@ function applySiteName(name: string): void {
   if (!trimmed) return;
   ui.siteName.textContent = trimmed;
   document.title = trimmed;
+}
+
+/**
+ * Empties every figure on the page.
+ *
+ * Used when the profile changes: the numbers on screen were measured under the
+ * old one, and leaving them under the new label would misattribute them. They
+ * are cleared rather than re-measured, so changing a setting never moves
+ * hundreds of megabytes on its own.
+ */
+function clearResults(): void {
+  lastResults = undefined;
+  lastDownloadBps = undefined;
+
+  for (const node of [
+    ui.download,
+    ui.upload,
+    ui.latency,
+    ui.jitter,
+    ui.packetLoss,
+    ui.downLoaded,
+    ui.upLoaded,
+    ui.downJitter,
+    ui.upJitter,
+  ]) {
+    setText(node, '—');
+  }
+  ui.downloadUnit.textContent = '';
+  ui.uploadUnit.textContent = '';
+  ui.aim.innerHTML = '';
+  ui.downloadChart.innerHTML = '';
+  ui.uploadChart.innerHTML = '';
+  ui.detailBody.innerHTML = '';
+  ui.measuredAt.textContent = '';
+  ui.permalink.hidden = true;
+  ui.precisionNote.hidden = true;
+
+  stages = [];
+  stageOutcome.clear();
+  completedRequests = 0;
+  currentStage = -1;
+  paintChevrons();
+  clearError();
 }
 
 function render(results: Results, final = false): void {
@@ -583,6 +632,8 @@ function maybeNotePrecision(summary: MeasurementSummary): void {
 
 async function run(): Promise<void> {
   clearError();
+  ui.idleNote.hidden = true;
+  ui.pause.disabled = false;
   ui.restart.disabled = true;
   ui.permalink.hidden = true;
   hideStepTip();
@@ -775,10 +826,13 @@ ui.restart.addEventListener('click', () => {
 });
 
 /**
- * Changing the profile re-runs immediately.
+ * Changing the profile clears the result and waits.
  *
- * Leaving the old result on screen under a new profile name would be the
- * worst of both: the figures would not be what the label says they are.
+ * It used to start a run immediately, to avoid the worst of both worlds:
+ * yesterday's figures sitting under today's profile name, which is a lie about
+ * what they are. Clearing solves that without the side effect — on `lan-10g`
+ * an accidental brush of the dropdown was several gigabytes down the wire
+ * before you could react to it.
  */
 ui.profileSelect.addEventListener('change', () => {
   try {
@@ -786,7 +840,16 @@ ui.profileSelect.addEventListener('change', () => {
   } catch {
     // Storage unavailable; the choice simply will not be remembered.
   }
-  void start();
+  clearResults();
+  showIdle('Ready — press Retest to measure with this profile.');
+});
+
+ui.autostart.addEventListener('change', () => {
+  try {
+    localStorage.setItem(AUTOSTART_KEY, ui.autostart.checked ? '1' : '0');
+  } catch {
+    // Storage unavailable; the choice lasts for this page only.
+  }
 });
 
 attachTraceHover('download', ui.downloadChart);
@@ -812,6 +875,66 @@ function start(): Promise<void> {
   });
 }
 
-// Auto-start on load, as the brief asks — after the picker is populated, so
-// the run honours a remembered choice rather than always taking the default.
-void setUpProfilePicker().then(start);
+/**
+ * Whether to measure on load.
+ *
+ * Three sources, most specific first: the URL, this browser's remembered
+ * choice, then the deployment's default. The URL wins for one page load and is
+ * deliberately not remembered — a link someone sent you should not silently
+ * reconfigure your browser.
+ */
+function shouldAutostart(serverDefault: boolean): boolean {
+  const asked = new URLSearchParams(window.location.search).get('autostart');
+  if (asked !== null) return !/^(0|false|no|off)$/i.test(asked.trim());
+
+  try {
+    const stored = localStorage.getItem(AUTOSTART_KEY);
+    if (stored !== null) return stored === '1';
+  } catch {
+    // Private browsing, or storage disabled.
+  }
+  return serverDefault;
+}
+
+/**
+ * The page, ready but not measuring.
+ *
+ * A test moves hundreds of megabytes. Opening the page to read the history or
+ * change a setting should not do that behind your back — least of all during
+ * the video call that made you suspicious of the network in the first place.
+ */
+function showIdle(message: string): void {
+  showNow('Ready', undefined, false);
+  ui.restart.disabled = false;
+  ui.pause.disabled = true;
+  ui.phaseDetail.textContent = '';
+  ui.idleNote.textContent = message;
+  ui.idleNote.hidden = false;
+  document.body.dataset.testState = 'idle';
+}
+
+async function bootstrap(): Promise<void> {
+  await setUpProfilePicker();
+
+  // A deployment that cannot be reached for its default gets the historical
+  // behaviour, so a status endpoint failing never leaves the page inert.
+  let serverDefault = true;
+  try {
+    serverDefault = (await fetchStatus()).autostart;
+  } catch {
+    // Keep the default; `run` will surface the real failure.
+  }
+
+  const on = shouldAutostart(serverDefault);
+  ui.autostart.checked = on;
+  if (on) {
+    await start();
+    return;
+  }
+  showIdle('Auto-start is off. Press Retest when you are ready to measure.');
+}
+
+void bootstrap();
+
+// Light or dark, remembered, on every page.
+setUpThemeToggle();

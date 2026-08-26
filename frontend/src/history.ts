@@ -7,8 +7,9 @@
  */
 
 import './styles.css';
+import { setUpThemeToggle } from './theme';
 import { fetchStatus, setClientName, setRunNote } from './api';
-import { formatBandwidth, formatLatency, formatPacketLoss } from './format';
+import { formatBandwidth, formatLatency, formatPacketLoss, latencyPredatesNagleFix } from './format';
 
 interface StoredRun {
   id: number;
@@ -30,6 +31,8 @@ interface StoredRun {
   scores: Record<string, string>;
   /** A note written by hand after the run. */
   note: string | null;
+  /** The build that measured this run. `null` for runs stored before 1.5.0. */
+  appVersion: string | null;
 }
 
 interface ClientSummary {
@@ -53,6 +56,10 @@ let lastRuns: StoredRun[] = [];
 let knownClients: ClientSummary[] = [];
 
 const ui = {
+  compareBar: el('compare-bar'),
+  compareCount: el('compare-count'),
+  compareGo: el<HTMLAnchorElement>('compare-go'),
+  compareClear: el<HTMLButtonElement>('compare-clear'),
   title: el('page-title'),
   chart: el('chart'),
   rows: el('rows'),
@@ -246,13 +253,30 @@ function renderRows(runs: StoredRun[]): void {
       const who = clientLabel(r);
       const detail = who === r.clientIp ? r.userAgent : `${r.clientIp}
 ${r.userAgent}`;
+
+      // Runs measured before 1.3.1 carry up to 40 ms of our own Nagle stall in
+      // every latency figure. Marked rather than hidden or silently corrected:
+      // the number is what was recorded, and the reader needs to know it is not
+      // comparable with the rows around it.
+      const stale = latencyPredatesNagleFix(r.appVersion);
+      const staleWhy = r.appVersion
+        ? `Measured by ${r.appVersion}, before the TCP_NODELAY fix in 1.3.1 — latency may be overstated by up to 40 ms.`
+        : 'Measured before the version was recorded, so this may predate the TCP_NODELAY fix in 1.3.1 — latency may be overstated by up to 40 ms.';
+      const lat = (value: number | null) =>
+        stale
+          ? `<span class="suspect" title="${esc(staleWhy)}">${esc(formatLatency(value))}<span class="suspect__mark" aria-hidden="true">*</span><span class="visually-hidden"> — ${esc(staleWhy)}</span></span>`
+          : esc(formatLatency(value));
       return `<tr>
+        <td class="cell--pick">
+          <input type="checkbox" class="pick" data-id="${r.id}" data-testid="pick"
+                 aria-label="Select this run to compare" />
+        </td>
         <td>${esc(formatWhen(r.recordedAt))}</td>
         <td class="cell--client" title="${esc(detail)}">${esc(who)}</td>
-        <td class="cell--num">${down.value}<span class="cell--unit"> ${down.unit}</span></td>
+        <td class="cell--num" data-testid="row-download">${down.value}<span class="cell--unit"> ${down.unit}</span></td>
         <td class="cell--num">${up.value}<span class="cell--unit"> ${up.unit}</span></td>
-        <td class="cell--num">${esc(formatLatency(r.latency))}</td>
-        <td class="cell--num">${esc(formatLatency(r.downLoadedLatency))}</td>
+        <td class="cell--num">${lat(r.latency)}</td>
+        <td class="cell--num">${lat(r.downLoadedLatency)}</td>
         <td class="cell--num">${esc(formatPacketLoss(r.packetLoss ?? undefined))}</td>
         <td class="cell--ratings">${ratings}</td>
         <td class="cell--profile">${esc(r.profile)}</td>
@@ -268,6 +292,11 @@ ${r.userAgent}`;
       </tr>`;
     })
     .join('');
+
+  // The table is rebuilt whenever the filter changes, which throws away the
+  // checkboxes along with the rows. The selection lives outside the DOM for
+  // exactly this reason; put it back.
+  refreshCompareBar();
 }
 
 async function load(): Promise<void> {
@@ -429,3 +458,52 @@ void (async () => {
     showError(e);
   }
 })();
+
+/**
+ * Choosing two runs to compare.
+ *
+ * Insertion-ordered, and capped at two by dropping the oldest choice rather
+ * than refusing the new one: a third click means "compare this one instead of
+ * the one I picked first", and making the reader hunt for a checkbox to clear
+ * would be answering a question they did not ask.
+ */
+const picked: number[] = [];
+
+function refreshCompareBar(): void {
+  ui.compareBar.hidden = picked.length === 0;
+  ui.compareCount.textContent =
+    picked.length === 1 ? '1 run selected — pick one more' : `${picked.length} runs selected`;
+
+  const ready = picked.length === 2;
+  ui.compareGo.hidden = !ready;
+  if (ready) ui.compareGo.href = `/compare.html?a=${picked[0]}&b=${picked[1]}`;
+
+  for (const box of ui.rows.querySelectorAll<HTMLInputElement>('input.pick')) {
+    box.checked = picked.includes(Number(box.dataset.id));
+  }
+}
+
+ui.rows.addEventListener('change', (event) => {
+  const box = (event.target as HTMLElement | null)?.closest<HTMLInputElement>('input.pick');
+  if (!box) return;
+
+  const id = Number(box.dataset.id);
+  if (!Number.isInteger(id)) return;
+
+  const at = picked.indexOf(id);
+  if (at >= 0) {
+    picked.splice(at, 1);
+  } else {
+    picked.push(id);
+    if (picked.length > 2) picked.shift();
+  }
+  refreshCompareBar();
+});
+
+ui.compareClear.addEventListener('click', () => {
+  picked.length = 0;
+  refreshCompareBar();
+});
+
+// Light or dark, remembered, on every page.
+setUpThemeToggle();

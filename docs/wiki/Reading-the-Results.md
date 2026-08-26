@@ -158,3 +158,51 @@ machine*; a description says *which test*, and that is what differs between two
 runs from the same laptop an hour and a floor apart. Without one, a history of
 twenty runs from `stevie-pc` is twenty numbers with no way to tell which was
 the one taken in the garage.
+
+## Comparing two runs
+
+Pick two rows in the history and press Compare. `/compare.html` puts them side
+by side and computes the difference, because the interesting part of two runs
+is the change between them and the eye is poor at differencing two columns of
+formatted numbers.
+
+The change is signed by **improvement**, not by arithmetic. More bandwidth and
+less latency are both good news, so both are green; a table that coloured by
+the sign alone would say the opposite on half its rows. A change under 2% is
+reported as no change — two runs of the same link differ by that much every
+time, and a page that called it an improvement would cry wolf on every use.
+
+A dash means the comparison has no answer: one of the runs did not measure that
+thing, or the earlier value was zero. A percentage of nothing is undefined
+rather than infinite.
+
+### When latency cannot be compared
+
+If either run predates 1.3.1, its latency carries up to 40 ms of the
+`TCP_NODELAY` stall that release fixed. Those rows are greyed and marked, and
+the footer says so: the difference is mostly our own bug being fixed, not the
+network changing. Bandwidth is unaffected — the bug only ever delayed small
+responses, which is why it survived three releases with throughput looking
+right.
+
+## Auto-start
+
+The page measures as soon as it loads. That is what makes it useful as a
+bookmark, and it is on by default.
+
+It is also several hundred megabytes, which is the last thing you want during
+the video call that made you suspicious of the network. So it can be turned
+off, three ways, most specific first:
+
+| How | Scope |
+|---|---|
+| `?autostart=0` on the URL | This visit only, never remembered |
+| The **Auto-start** toggle beside Retest | This browser, remembered |
+| `server.autostart` / `SPEEDTEST_AUTOSTART` | The deployment's default |
+
+The URL override is deliberately not remembered: a link someone sends you
+should not silently reconfigure your browser.
+
+Changing the profile no longer starts a run either. It clears the figures on
+screen — they were measured under the old profile, and leaving them under the
+new label would misattribute them — and waits for Retest.
