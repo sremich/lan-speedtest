@@ -76,6 +76,16 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   exit 0
 fi
 
+# The wiki is a fresh clone, so it inherits nothing from this repository's
+# config — and on a machine whose git identity is only ever set per-repository,
+# committing here fails outright. Carry the source repository's identity across,
+# falling back to GitHub's noreply form rather than whatever the host guessed
+# from the hostname.
+wiki_name="$(git -C "$SRC" config user.name || true)"
+wiki_email="$(git -C "$SRC" config user.email || true)"
+git config user.name "${wiki_name:-$(git config --global user.name || echo "wiki publisher")}"
+git config user.email "${wiki_email:-$(git config --global user.email || echo "noreply@users.noreply.github.com")}"
+
 git commit --quiet -m "Publish wiki from docs/wiki"
 git push --quiet origin HEAD
 echo "==> pushed"
