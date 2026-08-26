@@ -6,7 +6,7 @@ three-part X.Y.Z (bugfix +0.0.1, minor +0.1.0, major +1.0.0). On release,
 move the Unreleased entries into a new version section, bump `VERSION`,
 commit, then tag.
 
-## [Unreleased]
+## [1.6.0] - 2026-08-26
 
 Preparing the repository to be public.
 
@@ -763,7 +763,8 @@ milestone increments.
 - Tier-4 hardware validation outstanding; releases stay pre-release until it
   passes.
 
-[Unreleased]: https://github.com/sremich/lan-speedtest/compare/v1.5.1...HEAD
+[Unreleased]: https://github.com/sremich/lan-speedtest/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/sremich/lan-speedtest/releases/tag/v1.6.0
 [1.5.1]: https://github.com/sremich/lan-speedtest/releases/tag/v1.5.1
 [1.5.0]: https://github.com/sremich/lan-speedtest/releases/tag/v1.5.0
 [1.4.0]: https://github.com/sremich/lan-speedtest/releases/tag/v1.4.0
